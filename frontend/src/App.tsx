@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   Navigate,
@@ -27,6 +27,7 @@ import {
   EyeOff,
   FileText,
   Flame,
+  ImagePlus,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -39,11 +40,12 @@ import {
   ShieldCheck,
   Sparkles,
   Ticket,
+  Trash2,
   Trophy,
   Users,
   X,
 } from "lucide-react";
-import { api, type ApiQuiz, type ApiRegistration } from "./api";
+import { api, type ApiQuiz, type ApiRegistration, type EventDraft } from "./api";
 import type { Event, Rank, Role, User, Notice } from "./types";
 import LandingPage from "./LandingPage";
 import ThemeToggle from "./ThemeToggle";
@@ -2749,8 +2751,41 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [capacity, setCapacity] = useState(100);
+  const [imagePreview, setImagePreview] = useState("");
+  const [imagePublicId, setImagePublicId] = useState("");
+  const [existingImageId, setExistingImageId] = useState("");
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const [removeImageRequested, setRemoveImageRequested] = useState(false);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const resetImageState = (preview = "", publicId = "") => {
+    setImagePreview(preview);
+    setImagePublicId(publicId);
+    setExistingImageId(publicId);
+    setImageFile(null);
+    setUploadingImage(false);
+    setRemoveImageRequested(false);
+    if (imageInputRef.current) imageInputRef.current.value = "";
+  };
+  const pickImageFile = (file?: File | null) => {
+    if (!file) return;
+    if (!/^image\/(jpeg|png|webp)$/.test(file.type)) {
+      setError("Use a JPG, PNG, or WebP image.");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      setError("Event images must be 5 MB or smaller.");
+      return;
+    }
+    setError("");
+    // Preview locally first; the file only reaches Cloudinary on publish.
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setImagePublicId("");
+    setRemoveImageRequested(false);
+  };
   useEffect(() => {
     void api
       .events()
@@ -2772,6 +2807,8 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
             className="btn btn-dark"
             onClick={() => {
               setEditingId(null);
+              setError("");
+              resetImageState();
               setModal(true);
             }}
           >
@@ -2818,6 +2855,7 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                     setStartsAt(localDate(record.startsAt));
                     setEndsAt(localDate(record.endsAt));
                     setCapacity(record.capacity);
+                    resetImageState(record.image || "", record.imagePublicId || "");
                     setModal(true);
                   })
                   .catch((cause: unknown) =>
@@ -2885,6 +2923,33 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                 <Archive size={16} />
               </button>
             )}
+            {!["archived", "ended"].includes(e.status) && (
+              <button
+                className="icon-button"
+                aria-label="Delete event"
+                title="Delete event (removes its Cloudinary image too)"
+                onClick={() => {
+                  if (!window.confirm(`Delete “${e.title}”? Its image will also be removed from Cloudinary.`)) return;
+                  void api
+                    .deleteEvent(e.id)
+                    .then(() => {
+                      setList((current) =>
+                        current.filter((item) => item.id !== e.id),
+                      );
+                      toast("Event deleted");
+                    })
+                    .catch((cause: unknown) =>
+                      setError(
+                        cause instanceof Error
+                          ? cause.message
+                          : "Could not delete event.",
+                      ),
+                    );
+                }}
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
           </div>
         ))}
       </div>
@@ -2897,6 +2962,11 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
         <Modal
           title={editingId ? "Edit event" : "Create an event"}
           close={() => {
+            // If a new poster was already uploaded to Cloudinary but the
+            // event was never saved with it, clean the orphan asset up now.
+            if (imagePublicId && imagePublicId !== existingImageId)
+              void api.deleteEventImage(imagePublicId).catch(() => {});
+            resetImageState();
             setModal(false);
             setEditingId(null);
           }}
@@ -2910,6 +2980,63 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
               placeholder="e.g. The Big Idea"
             />
           </label>
+          <div className="event-image-box">
+            <span className="event-image-label">Event image</span>
+            {!removeImageRequested && (imageFile || imagePreview) ? (
+              <div className="event-image-preview">
+                <img src={imagePreview} alt="Event image preview" />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  disabled={uploadingImage}
+                  onClick={() => {
+                    // Uploaded for this unsaved session? Remove it from Cloudinary too.
+                    if (imagePublicId && imagePublicId !== existingImageId)
+                      void api.deleteEventImage(imagePublicId).catch(() => {});
+                    setImageFile(null);
+                    setImagePreview("");
+                    setImagePublicId("");
+                    if (imageInputRef.current)
+                      imageInputRef.current.value = "";
+                  }}
+                >
+                  Remove preview
+                </button>
+              </div>
+            ) : !removeImageRequested && existingImageId ? (
+              <div className="event-image-preview">
+                <img src={imagePreview} alt="Current event image" />
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => setRemoveImageRequested(true)}
+                >
+                  Remove current image
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="event-image-select"
+                disabled={uploadingImage}
+                onClick={() => imageInputRef.current?.click()}
+              >
+                <ImagePlus size={20} />
+                <span>
+                  {removeImageRequested
+                    ? "Image will be removed · click to choose another"
+                    : "Click to select an event image (JPG, PNG or WebP, up to 5 MB)"}
+                </span>
+              </button>
+            )}
+            <input
+              ref={imageInputRef}
+              type="file"
+              accept="image/jpeg,image/png,image/webp"
+              hidden
+              onChange={(e) => pickImageFile(e.target.files?.[0])}
+            />
+          </div>
           <label>
             Category
             <select
@@ -2988,7 +3115,7 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
               onClick={() => {
                 setSaving(true);
                 setError("");
-                const payload = {
+                const payload: EventDraft = {
                   title: name.trim(),
                   category,
                   description: description.trim(),
@@ -2999,12 +3126,50 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                   teamMin: 1,
                   teamMax: 1,
                 };
-                const save = editingId
-                  ? api.updateEvent(editingId, payload)
-                  : api
-                      .createEvent(payload)
-                      .then((draft) => api.publishEvent(draft.id));
-                void save
+                // Image flow: the poster is previewed locally first and only
+                // pushed to Cloudinary when the admin publishes. If the save
+                // fails afterwards the fresh upload is deleted so no orphan
+                // image lingers in Cloudinary.
+                const withImage = async (): Promise<EventDraft> => {
+                  if (imageFile) {
+                    setUploadingImage(true);
+                    const uploaded = await api.uploadEventImage(imageFile);
+                    setImagePreview(uploaded.url);
+                    setImagePublicId(uploaded.publicId);
+                    return {
+                      ...payload,
+                      image: uploaded.url,
+                      imagePublicId: uploaded.publicId,
+                    };
+                  }
+                  if (imagePublicId)
+                    return { ...payload, image: imagePreview, imagePublicId };
+                  if (removeImageRequested && existingImageId)
+                    return { ...payload, image: "", imagePublicId: "" };
+                  return payload;
+                };
+                const run = async () => {
+                  const finalPayload = await withImage();
+                  try {
+                    return editingId
+                      ? await api.updateEvent(editingId, finalPayload)
+                      : await api
+                          .createEvent(finalPayload)
+                          .then((draft) => api.publishEvent(draft.id));
+                  } catch (cause) {
+                    const freshId =
+                      finalPayload.imagePublicId &&
+                      finalPayload.imagePublicId !== existingImageId
+                        ? finalPayload.imagePublicId
+                        : "";
+                    if (freshId)
+                      await api.deleteEventImage(freshId).catch(() => {});
+                    throw cause;
+                  } finally {
+                    setUploadingImage(false);
+                  }
+                };
+                void run()
                   .then((saved) => {
                     setList((current) =>
                       editingId
@@ -3020,6 +3185,7 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                     setVenue("");
                     setStartsAt("");
                     setEndsAt("");
+                    resetImageState();
                     toast("Event published");
                   })
                   .catch((cause: unknown) =>
