@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { v2 as cloudinary } from "cloudinary";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
-import { fail } from "../common/errors/app-error.js";
+import { AppError, fail } from "../common/errors/app-error.js";
 
 export type UploadedImage = { url: string; publicId: string };
 
@@ -26,12 +26,15 @@ const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
  * public id needed to replace or delete the asset later.
  */
 export async function uploadEventImage(file: Express.Multer.File): Promise<UploadedImage> {
-  if (!cloudinaryConfigured)
-    return fail(503, "CLOUDINARY_NOT_CONFIGURED", "Image uploads are not configured");
+  if (!file) return fail(400, "IMAGE_REQUIRED", "Select an image file to upload");
+  // Validate the file itself before touching Cloudinary so misconfigured
+  // servers still give the admin actionable feedback about the upload.
   if (!ALLOWED_MIME_TYPES.has(file.mimetype))
     return fail(415, "UNSUPPORTED_IMAGE_TYPE", "Use a JPG, PNG, or WebP image");
   if (file.size > MAX_IMAGE_BYTES)
     return fail(413, "IMAGE_TOO_LARGE", "Event images must be 5 MB or smaller");
+  if (!cloudinaryConfigured)
+    return fail(503, "CLOUDINARY_NOT_CONFIGURED", "Image uploads are not configured");
 
   const checksum = createHash("sha256").update(file.buffer).digest("base64");
   return new Promise((resolve, reject) => {
@@ -50,8 +53,24 @@ export async function uploadEventImage(file: Express.Multer.File): Promise<Uploa
         },
         (error, result) => {
           if (error || !result?.secure_url || !result?.public_id) {
-            logger.error({ error }, "Cloudinary upload failed");
-            reject(new Error("Could not upload the event image"));
+            // Log the real cause (auth failure, bad folder, network, etc.) so
+            // ops can diagnose, but only surface a safe AppError to the client.
+            logger.error(
+              {
+                error: error
+                  ? { name: error.name, message: error.message, http_code: error.http_code }
+                  : undefined,
+                result,
+              },
+              "Cloudinary upload failed",
+            );
+            reject(
+              new AppError(
+                502,
+                "IMAGE_UPLOAD_FAILED",
+                "Could not upload the event image. Check CLOUDINARY_* settings and the server logs for details.",
+              ),
+            );
             return;
           }
           resolve({ url: result.secure_url, publicId: result.public_id });
