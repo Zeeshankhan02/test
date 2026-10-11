@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { v2 as cloudinary } from "cloudinary";
 import { env } from "../config/env.js";
 import { logger } from "../config/logger.js";
@@ -20,6 +19,11 @@ if (cloudinaryConfigured) {
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const ALLOWED_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+/** Fail fast if Cloudinary's API is unreachable (offline PC, firewall, proxy). */
+const CLOUDINARY_TIMEOUT_MS = 8000;
+
+/** Folder for event posters; falls back to the app default when unset. */
+const eventImageFolder = () => env.CLOUDINARY_EVENT_FOLDER || "festiqo/events";
 
 /**
  * Uploads an event poster to Cloudinary and returns its secure URL plus the
@@ -36,20 +40,45 @@ export async function uploadEventImage(file: Express.Multer.File): Promise<Uploa
   if (!cloudinaryConfigured)
     return fail(503, "CLOUDINARY_NOT_CONFIGURED", "Image uploads are not configured");
 
-  const checksum = createHash("sha256").update(file.buffer).digest("base64");
-  return new Promise((resolve, reject) => {
+  return new Promise<UploadedImage>((resolve, reject) => {
+    // Fail fast with a clear message instead of letting the SDK block until its
+    // 60-second timeout when the host cannot reach api.cloudinary.com.
+    let settled = false;
+    const timeoutHandle = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      logger.error(
+        { timeoutMs: CLOUDINARY_TIMEOUT_MS, cloudName: env.CLOUDINARY_CLOUD_NAME },
+        "Cloudinary upload timed out (network unreachable?)",
+      );
+      reject(
+        new AppError(
+          504,
+          "IMAGE_UPLOAD_TIMEOUT",
+          "Could not reach Cloudinary. Check this machine's internet connection or proxy settings.",
+        ),
+      );
+    }, CLOUDINARY_TIMEOUT_MS);
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeoutHandle);
+      fn();
+    };
     cloudinary.uploader
       .upload_stream(
         {
-          folder: env.CLOUDINARY_EVENT_FOLDER,
+          folder: eventImageFolder(),
           resource_type: "image",
           overwrite: false,
           unique_filename: true,
           use_filename: true,
           filename_override: file.originalname.replace(/\.[^.]*$/, "") || "event-image",
           tags: ["festiqo-event-image"],
-          access_control: [{ access_mode: "public", types: ["upload"] }],
-          headers: { "X-File-Checksum": checksum },
+          // NOTE: do not add `access_control` here — the upload API rejects it
+          // ("Access control invalid property: access_mode"). Uploaded assets are
+          // public by default. Likewise, custom `headers` (e.g. an
+          // "X-File-Checksum") are rejected with "Unsupported Custom Header".
         },
         (error, result) => {
           if (error || !result?.secure_url || !result?.public_id) {
@@ -64,16 +93,18 @@ export async function uploadEventImage(file: Express.Multer.File): Promise<Uploa
               },
               "Cloudinary upload failed",
             );
-            reject(
-              new AppError(
-                502,
-                "IMAGE_UPLOAD_FAILED",
-                "Could not upload the event image. Check CLOUDINARY_* settings and the server logs for details.",
+            settle(() =>
+              reject(
+                new AppError(
+                  502,
+                  "IMAGE_UPLOAD_FAILED",
+                  "Could not upload the event image. Check CLOUDINARY_* settings and the server logs for details.",
+                ),
               ),
             );
             return;
           }
-          resolve({ url: result.secure_url, publicId: result.public_id });
+          settle(() => resolve({ url: result.secure_url, publicId: result.public_id }));
         },
       )
       .end(file.buffer);

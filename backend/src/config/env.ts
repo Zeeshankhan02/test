@@ -5,6 +5,23 @@ const optionalString = z.preprocess(
   z.string().optional(),
 );
 
+/**
+ * Optional string that also trims the value and strips surrounding quotes.
+ * dotenv keeps literal quotes in values like CLOUDINARY_API_KEY="1234567890",
+ * and copy/pasted credentials often carry trailing spaces or newlines; both
+ * silently break Cloudinary signature checks with a confusing 502.
+ */
+const trimmedOptionalString = z.preprocess(
+  (value) => {
+    if (typeof value !== "string") return value === "" ? undefined : value;
+    // Strip surrounding quotes first, then whitespace — copy/pasted .env values
+    // commonly arrive as ` "my-cloud" `, `\"key\"\n`, etc.
+    const cleaned = value.replace(/^\s*["'](.*)["']\s*$/s, "$1").trim();
+    return cleaned === "" ? undefined : cleaned;
+  },
+  z.string().optional(),
+);
+
 const schema = z
   .object({
     NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
@@ -40,10 +57,10 @@ const schema = z
       .default("false")
       .transform((v) => v === "true"),
     COOKIE_SAME_SITE: z.enum(["strict", "lax", "none"]).default("lax"),
-    CLOUDINARY_CLOUD_NAME: optionalString,
-    CLOUDINARY_API_KEY: optionalString,
-    CLOUDINARY_API_SECRET: optionalString,
-    CLOUDINARY_EVENT_FOLDER: z.string().trim().min(1).default("festiqo/events"),
+    CLOUDINARY_CLOUD_NAME: trimmedOptionalString,
+    CLOUDINARY_API_KEY: trimmedOptionalString,
+    CLOUDINARY_API_SECRET: trimmedOptionalString,
+    CLOUDINARY_EVENT_FOLDER: trimmedOptionalString,
   })
   .refine(
     (value) => value.JWT_ACCESS_SECRET !== value.JWT_REFRESH_SECRET,
