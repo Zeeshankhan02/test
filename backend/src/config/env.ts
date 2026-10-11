@@ -40,6 +40,10 @@ const schema = z
       .default("false")
       .transform((v) => v === "true"),
     COOKIE_SAME_SITE: z.enum(["strict", "lax", "none"]).default("lax"),
+    CLOUDINARY_CLOUD_NAME: optionalString,
+    CLOUDINARY_API_KEY: optionalString,
+    CLOUDINARY_API_SECRET: optionalString,
+    CLOUDINARY_EVENT_FOLDER: z.string().trim().min(1).default("festiqo/events"),
   })
   .refine(
     (value) => value.JWT_ACCESS_SECRET !== value.JWT_REFRESH_SECRET,
@@ -59,6 +63,14 @@ const schema = z
     ];
     return !smtp.some(Boolean) || smtp.every(Boolean);
   }, "SMTP_HOST requires SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and EMAIL_FROM")
+  .refine((value) => {
+    const cloudinary = [
+      value.CLOUDINARY_CLOUD_NAME,
+      value.CLOUDINARY_API_KEY,
+      value.CLOUDINARY_API_SECRET,
+    ];
+    return !cloudinary.some(Boolean) || cloudinary.every(Boolean);
+  }, "Event image uploads require CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET")
   .refine((value) => {
     const urls = [
       value.FRONTEND_URL,
