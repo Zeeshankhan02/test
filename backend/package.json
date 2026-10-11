@@ -1,0 +1,53 @@
+{
+  "name": "festiqo-backend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --env-file=.env --import tsx --watch src/server.ts",
+    "clean": "node scripts/clean-dist.mjs",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "start": "node --env-file=.env dist/server.js",
+    "admin:create": "node --env-file=.env --import tsx scripts/create-admin.ts",
+    "tickets:migrate-credentials": "node --env-file=.env --import tsx scripts/migrate-ticket-credentials.ts",
+    "health-check": "node --env-file=.env --import tsx scripts/health-check.ts",
+    "test:e2e": "npm run build && node tests/e2e/workflows.test.mjs",
+    "test:browser": "npm run build && node tests/e2e/frontend-workflow.test.mjs",
+    "test:email": "npm run build && node tests/integration/email.test.mjs",
+    "lint": "eslint src tests scripts",
+    "format": "prettier --write \"src/**/*.ts\" \"tests/**/*.{ts,mjs}\" \"scripts/**/*.{ts,mjs}\" \"docs/**/*.{md,yaml}\" \"*.{json,js,md}\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"tests/**/*.{ts,mjs}\" \"scripts/**/*.{ts,mjs}\" \"docs/**/*.{md,yaml}\" \"*.{json,js,md}\"",
+    "test": "npm run build && node tests/unit/security.test.mjs && node tests/integration/health.test.mjs && node tests/integration/email.test.mjs"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.5",
+    "dotenv": "^18.0.7",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.19.1",
+    "nodemailer": "^10.1.0",
+    "pino": "^9.13.0",
+    "socket.io": "^4.8.4",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/cookie-parser": "^1.4.9",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^22.18.6",
+    "@types/nodemailer": "^8.0.2",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
+    "playwright-core": "^1.64.0",
+    "prettier": "^3.9.9",
+    "smtp-server": "^3.19.20",
+    "socket.io-client": "^4.8.4",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.71.1"
+  }
+}

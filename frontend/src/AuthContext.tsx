@@ -1,212 +1,136 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useState,
   type ReactNode,
 } from "react";
-import { sampleUser, sampleVolunteer } from "./mockData";
+import { api, refreshSession } from "./api";
 import type { Role, User, Volunteer } from "./types";
 
-type Account = { user: User; password: string; active: boolean };
 type VolunteerCreated = { volunteer: Volunteer; password: string };
 type AuthValue = {
   user: User | null;
+  ready: boolean;
   isAuthenticated: boolean;
   volunteers: Volunteer[];
-  login: (role: Role, email: string, password: string) => boolean;
-  logout: () => void;
-  signupStudent: (email: string, password: string) => User;
-  createVolunteer: (email: string) => VolunteerCreated;
-  setVolunteerStatus: (id: string, status: Volunteer["status"]) => void;
+  volunteersLoading: boolean;
+  volunteersError: string;
+  reloadVolunteers: () => void;
+  login: (role: Role, email: string, password: string) => Promise<boolean>;
+  logout: () => Promise<void>;
+  signupStudent: (email: string, password: string) => Promise<User>;
+  createVolunteer: (email: string) => Promise<VolunteerCreated>;
+  setVolunteerStatus: (
+    id: string,
+    status: Volunteer["status"],
+  ) => Promise<void>;
 };
-
-const demos: Account[] = [
-  { user: sampleUser, password: "FestStudent@26", active: true },
-  {
-    user: {
-      ...sampleUser,
-      id: "v1",
-      name: "Sample Volunteer",
-      email: sampleVolunteer.email,
-      role: "volunteer",
-    },
-    password: "FestVolunteer@26",
-    active: true,
-  },
-  {
-    user: {
-      ...sampleUser,
-      id: "a1",
-      name: "admin",
-      email: "admin@gmail.com",
-      role: "admin",
-    },
-    password: "FestAdmin@26",
-    active: true,
-  },
-];
-const storage = {
-  read<T>(key: string, fallback: T): T {
-    try {
-      const value = localStorage.getItem(key);
-      return value ? (JSON.parse(value) as T) : fallback;
-    } catch {
-      return fallback;
-    }
-  },
-};
-const emailKey = (email: string) => email.trim().toLowerCase();
-function securePassword(accounts: Account[]) {
-  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ",
-    lower = "abcdefghijkmnopqrstuvwxyz",
-    digits = "23456789",
-    symbols = "!@#$%&*?";
-  const all = upper + lower + digits + symbols;
-  const pick = (chars: string) =>
-    chars[crypto.getRandomValues(new Uint32Array(1))[0] % chars.length];
-  for (;;) {
-    const chars = [pick(upper), pick(lower), pick(digits), pick(symbols)];
-    while (chars.length < 16) chars.push(pick(all));
-    for (let i = chars.length - 1; i > 0; i--) {
-      const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
-      [chars[i], chars[j]] = [chars[j], chars[i]];
-    }
-    const password = chars.join("");
-    if (!accounts.some((account) => account.password === password))
-      return password;
-  }
-}
 
 const AuthContext = createContext<AuthValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(() =>
-    storage.read("FestiQO-user", null)
-  );
-  const [accounts, setAccounts] = useState<Account[]>(() => {
-    const saved = storage.read<Account[]>("FestiQO-accounts", demos);
-    const currentDemos = demos.map((demo) => {
-      const previous = saved.find(
-        (account) => account.user.id === demo.user.id
-      );
-      return { ...demo, active: previous?.active ?? demo.active };
-    });
-    return [
-      ...currentDemos,
-      ...saved.filter(
-        (account) => !demos.some((demo) => demo.user.id === account.user.id)
-      ),
-    ];
-  });
-  const [volunteers, setVolunteers] = useState<Volunteer[]>(() =>
-    storage.read("FestiQO-volunteers", [sampleVolunteer])
-  );
-  useEffect(
-    () => localStorage.setItem("FestiQO-accounts", JSON.stringify(accounts)),
-    [accounts]
-  );
-  useEffect(
-    () =>
-      localStorage.setItem("FestiQO-volunteers", JSON.stringify(volunteers)),
-    [volunteers]
-  );
+  const [user, setUser] = useState<User | null>(null);
+  const [ready, setReady] = useState(false);
+  const [volunteers, setVolunteers] = useState<Volunteer[]>([]);
+  const [volunteersLoading, setVolunteersLoading] = useState(false);
+  const [volunteersError, setVolunteersError] = useState("");
 
-  const login = (role: Role, email: string, password: string) => {
-    const account = accounts.find(
-      (entry) =>
-        emailKey(entry.user.email) === emailKey(email) &&
-        entry.user.role === role &&
-        entry.password === password &&
-        entry.active
-    );
-    if (!account) return false;
-    setUser(account.user);
-    localStorage.setItem("FestiQO-user", JSON.stringify(account.user));
+  const reloadVolunteers = useCallback(() => {
+    if (user?.role !== "admin") return;
+    setVolunteersLoading(true);
+    setVolunteersError("");
+    void api
+      .volunteers()
+      .then(setVolunteers)
+      .catch((cause: unknown) =>
+        setVolunteersError(
+          cause instanceof Error ? cause.message : "Could not load volunteers.",
+        ),
+      )
+      .finally(() => setVolunteersLoading(false));
+  }, [user]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void refreshSession().then((session) => {
+      if (!cancelled) {
+        setUser(
+          session
+            ? {
+                ...session.user,
+                avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(session.user.email)}`,
+              }
+            : null,
+        );
+        setReady(true);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (user?.role !== "admin") {
+      setVolunteers([]);
+      setVolunteersLoading(false);
+      return;
+    }
+    reloadVolunteers();
+  }, [reloadVolunteers, user]);
+
+  const login = async (role: Role, email: string, password: string) => {
+    const signedIn = await api.login(email, password);
+    if (signedIn.role !== role) {
+      await api.logout();
+      return false;
+    }
+    setUser(signedIn);
     return true;
   };
-  const logout = () => {
+  const logout = async () => {
+    await api.logout().catch(() => undefined);
     setUser(null);
-    localStorage.removeItem("FestiQO-user");
+    setVolunteers([]);
   };
-  const signupStudent = (email: string, password: string) => {
-    if (
-      accounts.some(
-        (account) => emailKey(account.user.email) === emailKey(email)
-      )
-    )
-      throw new Error("An account already exists for this email.");
-    const localName = email
-      .trim()
-      .split("@")[0]
-      .replace(/[._-]+/g, " ")
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
-    const next: User = {
-      id: crypto.randomUUID(),
-      name: localName || "Student",
-      email: emailKey(email),
-      role: "student",
-      avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(
-        emailKey(email)
-      )}`,
-    };
-    setAccounts((current) => [
-      ...current,
-      { user: next, password, active: true },
-    ]);
-    return next;
+  const signupStudent = async (email: string, password: string) => {
+    const name =
+      email
+        .trim()
+        .split("@")[0]
+        .replace(/[._-]+/g, " ")
+        .replace(/\b\w/g, (letter) => letter.toUpperCase()) || "Student";
+    const signedUp = await api.signup(name, email.trim(), password);
+    setUser(signedUp);
+    return signedUp;
   };
-  const createVolunteer = (email: string): VolunteerCreated => {
-    const normalizedEmail = emailKey(email);
-    if (
-      accounts.some(
-        (account) => emailKey(account.user.email) === normalizedEmail
-      )
-    )
-      throw new Error("An account already exists for this email.");
-    const password = securePassword(accounts);
-    const id = crypto.randomUUID();
-    const name = normalizedEmail
-      .split("@")[0]
-      .replace(/[._-]+/g, " ")
-      .replace(/\b\w/g, (letter) => letter.toUpperCase());
-    const volunteerUser: User = {
-      id,
-      name: name || "Volunteer",
-      email: normalizedEmail,
-      role: "volunteer",
-      avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(
-        normalizedEmail
-      )}`,
-    };
-    const volunteer: Volunteer = {
-      id,
-      email: normalizedEmail,
-      status: "active",
-      createdAt: new Date().toISOString(),
-    };
-    setAccounts((current) => [
-      ...current,
-      { user: volunteerUser, password, active: true },
-    ]);
-    setVolunteers((current) => [volunteer, ...current]);
-    return { volunteer, password };
+  const createVolunteer = async (email: string) => {
+    const password = `${crypto.randomUUID()}${crypto.randomUUID().slice(0, 4)}`;
+    const created = await api.createVolunteer(email, password);
+    setVolunteers((current) => [created.volunteer, ...current]);
+    return created;
   };
-  const setVolunteerStatus = (id: string, status: Volunteer["status"]) => {
+  const setVolunteerStatus = async (
+    id: string,
+    status: Volunteer["status"],
+  ) => {
+    await api.setVolunteerStatus(id, status);
     setVolunteers((current) =>
-      current.map((item) => (item.id === id ? { ...item, status } : item))
-    );
-    setAccounts((current) =>
-      current.map((item) =>
-        item.user.id === id ? { ...item, active: status === "active" } : item
-      )
+      current.map((item) => (item.id === id ? { ...item, status } : item)),
     );
   };
+
   return (
     <AuthContext.Provider
       value={{
         user,
+        ready,
         isAuthenticated: !!user,
         volunteers,
+        volunteersLoading,
+        volunteersError,
+        reloadVolunteers,
         login,
         logout,
         signupStudent,

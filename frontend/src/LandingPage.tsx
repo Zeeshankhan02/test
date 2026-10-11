@@ -12,7 +12,9 @@ import {
   Users,
 } from "lucide-react";
 import { Link } from "react-router-dom";
-import { events } from "./mockData";
+import { useEffect, useState } from "react";
+import { api } from "./api";
+import type { Event } from "./types";
 import ThemeToggle from "./ThemeToggle";
 
 export default function LandingPage({
@@ -22,6 +24,18 @@ export default function LandingPage({
 }) {
   const enterPath = dashboardPath || "/login";
   const eventsPath = dashboardPath ? `${dashboardPath}/events` : "/login";
+  const [events, setEvents] = useState<Event[]>([]);
+  const [eventError, setEventError] = useState("");
+  useEffect(() => {
+    void api
+      .events()
+      .then(setEvents)
+      .catch((error: unknown) =>
+        setEventError(
+          error instanceof Error ? error.message : "Could not load events.",
+        ),
+      );
+  }, []);
   return (
     <main className="landing">
       <header className="landing-nav">
@@ -74,7 +88,12 @@ export default function LandingPage({
               <img src="https://i.pravatar.cc/80?img=12" />
             </div>
             <span>
-              <b>2,400+</b> already finding their people
+              <b>
+                {events
+                  .reduce((sum, event) => sum + event.registered, 0)
+                  .toLocaleString()}
+              </b>{" "}
+              registered spots
             </span>
           </div>
         </div>
@@ -116,7 +135,7 @@ export default function LandingPage({
       </section>
       <section className="landing-facts">
         <span>
-          <b>18</b> events to get into
+          <b>{events.length}</b> events to get into
         </span>
         <i />
         <span>
@@ -145,11 +164,12 @@ export default function LandingPage({
             Explore all events <ArrowRight size={16} />
           </Link>
         </div>
+        {eventError && <p role="alert">{eventError}</p>}
         <div className="landing-event-grid">
           {events.map((event, i) => (
             <article className="landing-event" key={event.id}>
               <div className="landing-event-photo">
-                <img src={event.image} alt="" />
+                <img src={event.image || undefined} alt="" />
                 <span>{event.category}</span>
                 <b>0{i + 1}</b>
               </div>
@@ -161,7 +181,7 @@ export default function LandingPage({
                     <CalendarDays size={14} />
                     {new Date(`${event.date}T00:00:00`).toLocaleDateString(
                       "en-US",
-                      { month: "short", day: "numeric" }
+                      { month: "short", day: "numeric" },
                     )}{" "}
                     · {event.time}
                   </span>
@@ -173,6 +193,9 @@ export default function LandingPage({
               </div>
             </article>
           ))}
+          {!eventError && events.length === 0 && (
+            <p>No published events yet. Check back soon.</p>
+          )}
         </div>
       </section>
       <section id="experience" className="landing-experience">

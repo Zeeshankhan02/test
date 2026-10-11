@@ -11,16 +11,13 @@ import {
   Users,
   X,
 } from "lucide-react";
-import {
-  events,
-  registrations,
-  sampleCertificateTemplate,
-  sampleUser,
-} from "./mockData";
+import { api } from "./api";
+import type { ApiRegistration } from "./api";
 import { useAuth } from "./AuthContext";
 import type {
   Certificate,
   CertificateTemplate,
+  Event,
   Registration,
   Volunteer,
 } from "./types";
@@ -95,11 +92,16 @@ function EmptyState({ title, message }: { title: string; message: string }) {
 }
 
 export function VolunteersPage({ toast }: { toast: Toast }) {
-  const { volunteers, createVolunteer, setVolunteerStatus } = useAuth();
+  const {
+    volunteers,
+    volunteersLoading: loading,
+    volunteersError,
+    reloadVolunteers,
+    createVolunteer,
+    setVolunteerStatus,
+  } = useAuth();
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [email, setEmail] = useState("");
   const [formError, setFormError] = useState("");
@@ -109,14 +111,11 @@ export function VolunteersPage({ toast }: { toast: Toast }) {
   } | null>(null);
   const [busy, setBusy] = useState(false);
   const [view, setView] = useState<Volunteer | null>(null);
-  useEffect(() => {
-    const timer = window.setTimeout(() => setLoading(false), 180);
-    return () => window.clearTimeout(timer);
-  }, []);
+  const loadError = !!volunteersError;
   const filtered = volunteers.filter(
     (volunteer) =>
       volunteer.email.includes(query.trim().toLowerCase()) &&
-      (statusFilter === "all" || volunteer.status === statusFilter)
+      (statusFilter === "all" || volunteer.status === statusFilter),
   );
   const reset = () => {
     setCreateOpen(false);
@@ -132,20 +131,21 @@ export function VolunteersPage({ toast }: { toast: Toast }) {
     }
     setBusy(true);
     setFormError("");
-    window.setTimeout(() => {
-      try {
-        setCreated(createVolunteer(normalized));
+    void createVolunteer(normalized)
+      .then((created) => {
+        setCreated(created);
         toast("Volunteer account created");
-      } catch (cause) {
+      })
+      .catch((cause: unknown) => {
         setFormError(
           cause instanceof Error
             ? cause.message
-            : "Could not create volunteer account."
+            : "Could not create volunteer account.",
         );
-      } finally {
+      })
+      .finally(() => {
         setBusy(false);
-      }
-    }, 300);
+      });
   };
   const copyPassword = async () => {
     if (!created) return;
@@ -154,7 +154,7 @@ export function VolunteersPage({ toast }: { toast: Toast }) {
       toast("Generated password copied");
     } catch {
       setFormError(
-        "Clipboard access is unavailable. Select and copy the password."
+        "Clipboard access is unavailable. Select and copy the password.",
       );
     }
   };
@@ -228,9 +228,7 @@ export function VolunteersPage({ toast }: { toast: Toast }) {
               <button
                 className="btn btn-outline"
                 onClick={() => {
-                  setLoadError(false);
-                  setLoading(true);
-                  window.setTimeout(() => setLoading(false), 250);
+                  reloadVolunteers();
                 }}
               >
                 Retry
@@ -261,9 +259,15 @@ export function VolunteersPage({ toast }: { toast: Toast }) {
                   <button
                     className="btn btn-outline"
                     onClick={() =>
-                      setVolunteerStatus(
+                      void setVolunteerStatus(
                         volunteer.id,
-                        volunteer.status === "active" ? "inactive" : "active"
+                        volunteer.status === "active" ? "inactive" : "active",
+                      ).catch((cause: unknown) =>
+                        toast(
+                          cause instanceof Error
+                            ? cause.message
+                            : "Could not update volunteer.",
+                        ),
                       )
                     }
                   >
@@ -382,7 +386,7 @@ export function VolunteersPage({ toast }: { toast: Toast }) {
 
 export function certificateRecipient(
   registration: Registration,
-  participantName: string
+  participantName: string,
 ) {
   const teamName = registration.teamName?.trim();
   return teamName || participantName;
@@ -432,40 +436,78 @@ type CertificateDraft = Omit<
 const blankDraft: CertificateDraft = {
   title: "Certificate of Participation",
   description: "for bringing your ideas and energy to the fest.",
-  eventId: events[0]?.id || "",
+  eventId: "",
   signatureName: "",
   signatureRole: "Fest Coordinator",
 };
+function toRegistration(row: ApiRegistration): Registration {
+  return {
+    id: row._id,
+    eventId: row.eventId,
+    userId: typeof row.userId === "string" ? row.userId : row.userId.name,
+    teamName: row.teamName || null,
+    members: row.members,
+    registeredAt: row.createdAt,
+    status: row.status === "confirmed" ? "confirmed" : "pending",
+    ticketId: "",
+  };
+}
 export function CertificatesPage({ toast }: { toast: Toast }) {
-  const [templates, setTemplates] = useState<CertificateTemplate[]>([
-    sampleCertificateTemplate,
-  ]);
+  const [templates, setTemplates] = useState<CertificateTemplate[]>([]);
+  const [availableEvents, setAvailableEvents] = useState<Event[]>([]);
+  const [registrations, setRegistrations] = useState<Registration[]>([]);
   const [certificates, setCertificates] = useState<Certificate[]>([]);
-  const [draft, setDraft] = useState<CertificateDraft>({
-    title: sampleCertificateTemplate.title,
-    description: sampleCertificateTemplate.description,
-    eventId: sampleCertificateTemplate.eventId,
-    signatureName: sampleCertificateTemplate.signatureName,
-    signatureRole: sampleCertificateTemplate.signatureRole,
-  });
-  const [editingId, setEditingId] = useState<string | null>(
-    sampleCertificateTemplate.id
-  );
-  const [registrationId, setRegistrationId] = useState(
-    registrations[0]?.id || ""
-  );
+  const [draft, setDraft] = useState<CertificateDraft>({ ...blankDraft });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [registrationId, setRegistrationId] = useState("");
   const [errors, setErrors] = useState<string[]>([]);
   const [preview, setPreview] = useState(false);
   const [previewPublished, setPreviewPublished] = useState(false);
   const [publishConfirm, setPublishConfirm] = useState(false);
   const [loading, setLoading] = useState(true);
   useEffect(() => {
-    const timer = window.setTimeout(() => setLoading(false), 160);
-    return () => window.clearTimeout(timer);
+    void Promise.all([api.certificateTemplates(), api.events()])
+      .then(async ([rows, eventRows]) => {
+        const registrationRows = (
+          await Promise.all(
+            eventRows.map((event) => api.eventRegistrations(event.id)),
+          )
+        ).flat();
+        setTemplates(
+          rows.map((row) => ({
+            id: row._id,
+            title: row.title,
+            description: row.description,
+            eventId: row.eventId,
+            signatureName: row.signatureName,
+            signatureRole: row.signatureRole,
+            status: row.status,
+            createdAt: row.createdAt,
+            recipientCount: 0,
+          })),
+        );
+        setAvailableEvents(eventRows);
+        setRegistrations(registrationRows.map(toRegistration));
+        setRegistrationId(registrationRows[0]?._id || "");
+        if (eventRows[0])
+          setDraft((current) =>
+            current.eventId
+              ? current
+              : { ...current, eventId: eventRows[0].id },
+          );
+      })
+      .catch((error: unknown) =>
+        toast(
+          error instanceof Error
+            ? error.message
+            : "Could not load certificate data.",
+        ),
+      )
+      .finally(() => setLoading(false));
   }, []);
-  const event = events.find((item) => item.id === draft.eventId);
+  const event = availableEvents.find((item) => item.id === draft.eventId);
   const eligible = registrations.filter(
-    (item) => item.eventId === draft.eventId && item.status === "confirmed"
+    (item) => item.eventId === draft.eventId && item.status === "confirmed",
   );
   const selectedRegistration =
     eligible.find((item) => item.id === registrationId) || eligible[0];
@@ -476,32 +518,41 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
     if (!draft.eventId) next.push("Choose an event.");
     if (!draft.signatureName.trim()) next.push("Add a signature name.");
     if (!draft.signatureRole.trim()) next.push("Add a signature role.");
-    if (!eligible.length)
-      next.push("There are no confirmed registrations for this event yet.");
     setErrors(next);
     return next.length === 0;
   };
-  const saveDraft = () => {
+  const saveDraft = async () => {
     if (!draft.title.trim()) {
       setErrors(["Add a certificate title before saving."]);
       return;
     }
     const existing = templates.find((item) => item.id === editingId);
-    const next: CertificateTemplate = {
-      id: editingId || crypto.randomUUID(),
-      ...draft,
-      status: existing?.status || "draft",
-      createdAt: existing?.createdAt || new Date().toISOString(),
-      recipientCount: existing?.recipientCount || 0,
-    };
-    setTemplates((current) =>
-      existing
-        ? current.map((item) => (item.id === next.id ? next : item))
-        : [next, ...current]
-    );
-    setEditingId(next.id);
-    toast("Certificate draft saved");
-    setErrors([]);
+    try {
+      const saved = editingId
+        ? await api.updateCertificateTemplate(editingId, draft)
+        : await api.createCertificateTemplate(draft);
+      const next: CertificateTemplate = {
+        id: saved._id,
+        ...draft,
+        status: saved.status,
+        createdAt: saved.createdAt,
+        recipientCount: existing?.recipientCount || 0,
+      };
+      setTemplates((current) =>
+        existing
+          ? current.map((item) => (item.id === next.id ? next : item))
+          : [next, ...current],
+      );
+      setEditingId(next.id);
+      toast("Certificate draft saved");
+      setErrors([]);
+    } catch (error) {
+      setErrors([
+        error instanceof Error
+          ? error.message
+          : "Could not save certificate draft.",
+      ]);
+    }
   };
   const newDraft = () => {
     setDraft({ ...blankDraft });
@@ -519,7 +570,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
     });
     setEditingId(template.id);
     setRegistrationId(
-      registrations.find((item) => item.eventId === template.eventId)?.id || ""
+      registrations.find((item) => item.eventId === template.eventId)?.id || "",
     );
     setErrors([]);
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -528,45 +579,43 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
     if (!validate()) return;
     setPublishConfirm(true);
   };
-  const publish = () => {
-    const templateId = editingId || crypto.randomUUID();
+  const publish = async () => {
     const existing = templates.find((item) => item.id === editingId);
-    const now = new Date().toISOString();
-    const template: CertificateTemplate = {
-      id: templateId,
-      ...draft,
-      status: "published",
-      createdAt: existing?.createdAt || now,
-      recipientCount: eligible.length,
-    };
-    const generated: Certificate[] = eligible.map((registration) => ({
-      id: crypto.randomUUID(),
-      templateId,
-      registrationId: registration.id,
-      eventId: registration.eventId,
-      recipientName: certificateRecipient(
-        registration,
-        registration.members[0] || sampleUser.name
-      ),
-      publishedAt: now,
-    }));
-    setCertificates((current) => [
-      ...current.filter((item) => item.templateId !== templateId),
-      ...generated,
-    ]);
-    setTemplates((current) =>
-      existing
-        ? current.map((item) => (item.id === templateId ? template : item))
-        : [template, ...current]
-    );
-    setEditingId(templateId);
-    setPublishConfirm(false);
-    setErrors([]);
-    toast(`Certificates published for ${generated.length} registrations`);
+    try {
+      const saved = editingId
+        ? await api.updateCertificateTemplate(editingId, draft)
+        : await api.createCertificateTemplate(draft);
+      const result = await api.publishCertificates(saved._id);
+      const templateId = saved._id;
+      const template: CertificateTemplate = {
+        id: templateId,
+        ...draft,
+        status: "published",
+        createdAt: saved.createdAt,
+        recipientCount: result.published,
+      };
+      setCertificates([]);
+      setTemplates((current) =>
+        existing
+          ? current.map((item) => (item.id === templateId ? template : item))
+          : [template, ...current],
+      );
+      setEditingId(templateId);
+      setPublishConfirm(false);
+      setErrors([]);
+      toast(`Certificates published for ${result.published} registrations`);
+    } catch (error) {
+      setErrors([
+        error instanceof Error
+          ? error.message
+          : "Could not publish certificates.",
+      ]);
+      setPublishConfirm(false);
+    }
   };
   const update = <K extends keyof CertificateDraft>(
     key: K,
-    value: CertificateDraft[K]
+    value: CertificateDraft[K],
   ) => setDraft((current) => ({ ...current, [key]: value }));
   return (
     <>
@@ -622,12 +671,12 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
                 update("eventId", event.target.value);
                 setRegistrationId(
                   registrations.find(
-                    (item) => item.eventId === event.target.value
-                  )?.id || ""
+                    (item) => item.eventId === event.target.value,
+                  )?.id || "",
                 );
               }}
             >
-              {events.map((item) => (
+              {availableEvents.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.title}
                 </option>
@@ -667,7 +716,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
                 <option key={registration.id} value={registration.id}>
                   {certificateRecipient(
                     registration,
-                    registration.members[0] || sampleUser.name
+                    registration.members[0] || registration.userId,
                   )}{" "}
                   · {registration.teamName ? "Team" : "Solo"}
                 </option>
@@ -709,7 +758,8 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
               selectedRegistration
                 ? certificateRecipient(
                     selectedRegistration,
-                    selectedRegistration.members[0] || sampleUser.name
+                    selectedRegistration.members[0] ||
+                      selectedRegistration.userId,
                   )
                 : "No eligible participant"
             }
@@ -754,8 +804,8 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
               <div className="certificate-row" key={template.id}>
                 <b>{template.title}</b>
                 <span>
-                  {events.find((item) => item.id === template.eventId)?.title ||
-                    "—"}
+                  {availableEvents.find((item) => item.id === template.eventId)
+                    ?.title || "—"}
                 </span>
                 <span>
                   {template.status === "published"
@@ -811,7 +861,8 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
               selectedRegistration
                 ? certificateRecipient(
                     selectedRegistration,
-                    selectedRegistration.members[0] || sampleUser.name
+                    selectedRegistration.members[0] ||
+                      selectedRegistration.userId,
                   )
                 : "No eligible participant"
             }

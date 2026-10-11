@@ -1,0 +1,334 @@
+openapi: 3.1.0
+info:
+  title: FestiQO API
+  version: 1.0.0
+  description: >-
+    Route and access inventory for the implemented API. Payload details and
+    transaction/security behavior are documented in api-contract.md.
+servers:
+  - url: /api/v1
+security:
+  - bearerAuth: []
+paths:
+  /health/live:
+    get:
+      servers: [{ url: / }]
+      security: []
+      summary: Liveness probe
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /health/ready:
+    get:
+      servers: [{ url: / }]
+      security: []
+      summary: Database readiness probe
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /auth/signup:
+    post:
+      security: []
+      summary: Create a student account and session
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "400": { $ref: "#/components/responses/Failure" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /auth/login:
+    post:
+      security: []
+      summary: Sign in and issue access and refresh credentials
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "401": { $ref: "#/components/responses/Failure" }
+  /auth/refresh:
+    post:
+      security: [{ cookieAuth: [] }]
+      summary: Rotate the refresh cookie
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "401": { $ref: "#/components/responses/Failure" }
+  /auth/logout:
+    post:
+      security: [{ cookieAuth: [] }]
+      summary: Revoke refresh sessions
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /auth/password/forgot:
+    post:
+      security: []
+      summary: Request a password reset email
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /auth/password/reset:
+    post:
+      security: []
+      summary: Consume a one-time password reset token
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "400": { $ref: "#/components/responses/Failure" }
+  /auth/me:
+    get:
+      summary: Get the signed-in user
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /auth/password:
+    patch:
+      summary: Change password and revoke sessions
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "400": { $ref: "#/components/responses/Failure" }
+  /events:
+    get:
+      security: []
+      summary: Search published events (admins also see drafts/cancelled)
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 1 } }
+        - {
+            in: query,
+            name: limit,
+            schema: { type: integer, minimum: 1, maximum: 100 },
+          }
+        - { in: query, name: category, schema: { type: string } }
+        - { in: query, name: q, schema: { type: string, maxLength: 100 } }
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+    post:
+      summary: Create a draft event
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "400": { $ref: "#/components/responses/Failure" }
+  /events/{eventId}:
+    parameters: [{ $ref: "#/components/parameters/eventId" }]
+    get:
+      security: []
+      summary: Get an event
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Failure" }
+    patch:
+      summary: Update an event
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /events/{eventId}/publish:
+    parameters: [{ $ref: "#/components/parameters/eventId" }]
+    post:
+      summary: Publish an event
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /events/{eventId}/cancel:
+    parameters: [{ $ref: "#/components/parameters/eventId" }]
+    post:
+      summary: Cancel an event and active registrations
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /events/{eventId}/archive:
+    parameters: [{ $ref: "#/components/parameters/eventId" }]
+    post:
+      summary: Archive an event
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /events/{eventId}/register:
+    parameters: [{ $ref: "#/components/parameters/eventId" }]
+    post:
+      summary: Register and issue a ticket QR credential
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /events/{eventId}/registrations:
+    parameters: [{ $ref: "#/components/parameters/eventId" }]
+    get:
+      summary: List registrations for an event
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /registrations:
+    get:
+      summary: List registrations with filters and pagination
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /registrations/me:
+    get:
+      summary: List the current user's registrations
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /registrations/{registrationId}:
+    parameters: [{ $ref: "#/components/parameters/registrationId" }]
+    get:
+      summary: Get an owned registration
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Failure" }
+  /registrations/{registrationId}/cancel:
+    parameters: [{ $ref: "#/components/parameters/registrationId" }]
+    post:
+      summary: Cancel an eligible registration
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /tickets/me:
+    get:
+      summary: List owned tickets and QR credentials
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /tickets/{ticketId}:
+    parameters: [{ $ref: "#/components/parameters/ticketId" }]
+    get:
+      summary: Get an owned ticket
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Failure" }
+  /scans/verify:
+    post:
+      summary: Verify ticket QR and check in once
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "429": { $ref: "#/components/responses/Failure" }
+  /volunteers/me/scans:
+    get:
+      summary: List the volunteer's scan history
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /volunteers/me/summary:
+    get:
+      summary: Get volunteer scan counters and recent entries
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /quizzes:
+    get:
+      summary: List published quizzes for the authenticated student or admin
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+    post:
+      summary: Create a quiz
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "400": { $ref: "#/components/responses/Failure" }
+  /quizzes/{quizId}:
+    parameters: [{ $ref: "#/components/parameters/quizId" }]
+    patch:
+      summary: Update a draft quiz before attempts begin
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /quizzes/{quizId}/publish:
+    parameters: [{ $ref: "#/components/parameters/quizId" }]
+    post:
+      summary: Publish a draft quiz
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /quizzes/{quizId}/close:
+    parameters: [{ $ref: "#/components/parameters/quizId" }]
+    post:
+      summary: Close a published quiz
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /quizzes/{quizId}/start:
+    parameters: [{ $ref: "#/components/parameters/quizId" }]
+    post:
+      summary: Start the student's single quiz attempt after event registration
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "403": { $ref: "#/components/responses/Failure" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /quiz-attempts/{attemptId}/submit:
+    parameters: [{ $ref: "#/components/parameters/attemptId" }]
+    post:
+      summary: Submit answers for server-side scoring
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /quizzes/{quizId}/leaderboard:
+    parameters: [{ $ref: "#/components/parameters/quizId" }]
+    get:
+      summary: Get ranked results for a registered participant or admin
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /notifications:
+    get:
+      summary: List notifications for the current user
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+    post:
+      summary: Broadcast a persisted announcement
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /notifications/{notificationId}/read:
+    parameters: [{ $ref: "#/components/parameters/notificationId" }]
+    patch:
+      summary: Mark an owned notification read
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /volunteers:
+    get:
+      summary: List volunteers
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+    post:
+      summary: Create a volunteer account
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "409": { $ref: "#/components/responses/Failure" }
+  /volunteers/{userId}/status:
+    parameters: [{ $ref: "#/components/parameters/userId" }]
+    patch:
+      summary: Activate or deactivate a volunteer
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /certificates/templates:
+    get:
+      summary: List certificate templates
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+    post:
+      summary: Create a certificate template
+      responses:
+        "201": { $ref: "#/components/responses/Success" }
+        "400": { $ref: "#/components/responses/Failure" }
+  /certificates/templates/{templateId}:
+    parameters: [{ $ref: "#/components/parameters/templateId" }]
+    patch:
+      summary: Update a draft certificate template
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "404": { $ref: "#/components/responses/Failure" }
+  /certificates/publish:
+    post:
+      summary: Issue certificates to eligible event registrations
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "503": { $ref: "#/components/responses/Unavailable" }
+  /certificates/me:
+    get:
+      summary: List the current user's active certificates
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /certificates/{certificateId}/revoke:
+    parameters: [{ $ref: "#/components/parameters/certificateId" }]
+    post:
+      summary: Revoke a certificate
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /certificates/verify/{certificateId}:
+    parameters: [{ $ref: "#/components/parameters/certificateId" }]
+    get:
+      security: []
+      summary: Publicly verify an active certificate
+      responses:
+        "200": { $ref: "#/components/responses/Success" }
+        "410": { $ref: "#/components/responses/Failure" }
+  /admin/dashboard:
+    get:
+      summary: Get persisted dashboard metrics
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+  /admin/audit-logs:
+    get:
+      summary: Read paginated administrative audit entries
+      responses: { "200": { $ref: "#/components/responses/Success" } }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: refreshToken
+  parameters:
+    eventId: { in: path, name: eventId, required: true, schema: { type: string } }
+    registrationId:
+      { in: path, name: registrationId, required: true, schema: { type: string } }
+    ticketId: { in: path, name: ticketId, required: true, schema: { type: string } }
+    quizId: { in: path, name: quizId, required: true, schema: { type: string } }
+    attemptId: { in: path, name: attemptId, required: true, schema: { type: string } }
+    notificationId:
+      { in: path, name: notificationId, required: true, schema: { type: string } }
+    userId: { in: path, name: userId, required: true, schema: { type: string } }
+    templateId: { in: path, name: templateId, required: true, schema: { type: string } }
+    certificateId:
+      { in: path, name: certificateId, required: true, schema: { type: string } }
+  responses:
+    Success:
+      description: Operation succeeded; response data shape is documented in api-contract.md.
+    Failure:
+      description: Validated application error.
+    Unavailable:
+      description: Database or synchronous workflow limit prevents completion.

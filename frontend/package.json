@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "lint": "eslint src",
     "preview": "vite preview",
     "test:scanner": "node --experimental-strip-types src/ticketValidation.test.ts"
   },
@@ -16,15 +17,20 @@
     "react": "latest",
     "react-dom": "latest",
     "react-qr-code": "latest",
-    "react-router-dom": "^6.30.1",
+    "react-router-dom": "^7.18.4",
+    "socket.io-client": "^4.8.4",
     "typescript": "latest",
     "vite": "latest"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "latest",
+    "eslint": "^10.12.0",
+    "globals": "^17.13.0",
     "postcss": "latest",
-    "tailwindcss": "^3.4.17"
+    "tailwindcss": "^3.4.17",
+    "typescript-eslint": "^8.71.1"
   }
 }

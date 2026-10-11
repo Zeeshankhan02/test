@@ -14,7 +14,7 @@ export type Event = {
   time: string;
   venue: string;
   category: string;
-  status: "upcoming" | "live" | "ended";
+  status: "draft" | "upcoming" | "live" | "ended" | "cancelled" | "archived";
   maxParticipants: number;
   registered: number;
   image: string;
@@ -60,6 +60,9 @@ export type Scan = {
   scannedBy: string;
   scannedAt: string;
   status: "valid_entry" | "duplicate" | "invalid";
+  participantName?: string;
+  teamName?: string;
+  eventName?: string;
 };
 export type QuizQuestion = {
   id: string;
