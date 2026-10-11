@@ -29,7 +29,9 @@ eventsRoutes.post(
   imageUpload.single("image"),
   uploadEventImageFile,
 );
-eventsRoutes.delete("/images/:publicId(*)", allow("admin"), deleteEventImageByPublicId);
+// Express 5 uses path-to-regexp v8, which no longer supports the `(*)` wildcard
+// syntax. `{*publicId}` captures any remaining segments (including slashes).
+eventsRoutes.delete("/images/{*publicId}", allow("admin"), deleteEventImageByPublicId);
 eventsRoutes.post("/", allow("admin"), createEvent);
 eventsRoutes.get("/:eventId", getEvent);
 eventsRoutes.patch("/:eventId", allow("admin"), updateEvent);
