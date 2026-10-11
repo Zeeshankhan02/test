@@ -45,6 +45,7 @@ const eventSchema = new Schema(
       index: true,
     },
     image: String,
+    imagePublicId: String,
   },
   { timestamps: true },
 );

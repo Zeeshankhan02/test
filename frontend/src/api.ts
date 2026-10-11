@@ -23,6 +23,7 @@ type ApiEvent = {
   capacity: number;
   registeredCount: number;
   image?: string;
+  imagePublicId?: string;
   registrationDeadline?: string;
 };
 type Envelope<T> = { success: true; data: T };
@@ -96,6 +97,8 @@ const json = (method: string, value?: unknown): RequestInit => ({
   ...(value === undefined ? {} : { body: JSON.stringify(value) }),
 });
 
+export type UploadedEventImage = { url: string; publicId: string };
+
 export const api = {
   async login(email: string, password: string) {
     const session = await raw<{ accessToken: string; user: ApiUser }>(
@@ -155,6 +158,23 @@ export const api = {
   eventRecord: (id: string) => request<ApiEvent>(`/events/${id}`),
   createEvent: async (value: EventDraft) =>
     toEvent(await request<ApiEvent>("/events", json("POST", value))),
+  /** Uploads a poster to Cloudinary through the backend before the event exists. */
+  uploadEventImage: (file: File) => {
+    const form = new FormData();
+    form.append("image", file);
+    return request<UploadedEventImage>("/events/images", {
+      method: "POST",
+      body: form,
+    });
+  },
+  /** Deletes an uploaded poster that is no longer needed (failed creation, replaced image). */
+  deleteEventImage: (publicId: string) =>
+    request<{ deleted: boolean }>(
+      `/events/images/${encodeURIComponent(publicId)}`,
+      json("DELETE")
+    ),
+  deleteEvent: (id: string) =>
+    request<{ deleted: boolean }>(`/events/${id}`, json("DELETE")),
   updateEvent: async (id: string, value: Partial<EventDraft>) =>
     toEvent(await request<ApiEvent>(`/events/${id}`, json("PATCH", value))),
   publishEvent: async (id: string) =>
@@ -364,6 +384,7 @@ export type EventDraft = {
   teamMin: number;
   teamMax: number;
   image?: string;
+  imagePublicId?: string;
 };
 export type ApiRegistration = {
   _id: string;
@@ -479,6 +500,7 @@ function toEvent(event: ApiEvent): Event {
     maxParticipants: event.capacity,
     registered: event.registeredCount,
     image: event.image || "",
+    imagePublicId: event.imagePublicId || "",
   };
 }
 

@@ -18,6 +18,7 @@ export type Event = {
   maxParticipants: number;
   registered: number;
   image: string;
+  imagePublicId?: string;
 };
 export type Registration = {
   id: string;

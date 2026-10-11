@@ -11,7 +11,7 @@ const eventFields = z.object({
   capacity: z.number().int().min(1),
   teamMin: z.number().int().min(1).default(1),
   teamMax: z.number().int().min(1).default(1),
-  image: z.url().optional(),
+  image: z.union([z.url(), z.literal("")]).optional(),
 });
 
 export const eventInput = eventFields.refine(

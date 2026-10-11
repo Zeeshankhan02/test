@@ -19,7 +19,9 @@
     "test": "npm run build && node tests/unit/security.test.mjs && node tests/integration/health.test.mjs && node tests/integration/email.test.mjs"
   },
   "dependencies": {
+    "@types/multer": "^2.3.0",
     "bcryptjs": "^3.0.2",
+    "cloudinary": "^2.11.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.5",
     "dotenv": "^18.0.7",
@@ -27,6 +29,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.19.1",
+    "multer": "^2.4.0",
     "nodemailer": "^10.1.0",
     "pino": "^9.13.0",
     "socket.io": "^4.8.4",
