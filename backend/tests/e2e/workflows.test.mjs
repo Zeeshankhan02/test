@@ -340,6 +340,16 @@ try {
     submissions.find((item) => item.response.status === 200).result.data.score,
     1,
   );
+  // Leaderboards stay hidden until the admin publishes results.
+  assert.equal(
+    (await call(`/quizzes/${quizId}/leaderboard`, { actor: winnerActor })).response
+      .status,
+    403,
+  );
+  await call(`/quizzes/${quizId}/results/publish`, {
+    method: "POST",
+    actor: accounts.admin,
+  });
   assert.equal(
     (await call(`/quizzes/${quizId}/leaderboard`, { actor: winnerActor })).result
       .data[0].score,
@@ -350,6 +360,134 @@ try {
       .result.data.status,
     "closed",
   );
+
+  // --- Autosave lifecycle: start -> answers -> state resume -> finalize ---
+  const autosaveQuiz = await call("/quizzes", {
+    method: "POST",
+    actor: accounts.admin,
+    body: {
+      title: "E2E autosave quiz",
+      eventId,
+      durationSeconds: 600,
+      status: "draft",
+      questions: [
+        { text: "Q one?", options: ["a", "b"], correctAnswer: 0 },
+        { text: "Q two?", options: ["c", "d"], correctAnswer: 1 },
+      ],
+    },
+  });
+  assert.equal(autosaveQuiz.response.status, 201);
+  const autosaveQuizId = autosaveQuiz.result.data._id;
+  await call(`/quizzes/${autosaveQuizId}/publish`, {
+    method: "POST",
+    actor: accounts.admin,
+  });
+  const secondAttempt = await call(`/quizzes/${autosaveQuizId}/start`, {
+    method: "POST",
+    actor: winnerActor,
+  });
+  assert.equal(secondAttempt.response.status, 201);
+  // The autosave attempt row is the same one created by the legacy submit
+  // (unique quiz/user index), so its answers are already persisted. Re-entering
+  // returns that snapshot; finalize then submits it with the correct answer
+  // kept and question two skipped.
+  const attemptId = secondAttempt.result.data.attemptId;
+  // Re-entering an in-flight attempt returns the same attempt snapshot
+  // (same attemptId, persisted answers) instead of starting over.
+  const resumed = await call(`/quizzes/${autosaveQuizId}/start`, {
+    method: "POST",
+    actor: winnerActor,
+  });
+  assert.equal(resumed.response.status, 201);
+  assert.equal(resumed.result.data.attemptId, attemptId);
+  assert.equal(resumed.result.data.answers[0], 0);
+  // Autosave is idempotent: re-saving the locked question never overwrites.
+  const savedAnswer = await call(`/quiz-attempts/${attemptId}/answers`, {
+    method: "POST",
+    actor: winnerActor,
+    body: { index: 0, answer: 0 },
+  });
+  assert.equal(savedAnswer.response.status, 200);
+  assert.equal(savedAnswer.result.data.locked, true);
+  assert.equal(savedAnswer.result.data.status, "answered");
+  const attemptState = await call(`/quiz-attempts/${attemptId}/state`, {
+    actor: winnerActor,
+  });
+  assert.equal(attemptState.result.data.answers[0], 0);
+  assert.equal(attemptState.result.data.status, "in_progress");
+  const finalized = await call(`/quiz-attempts/${attemptId}/finalize`, {
+    method: "POST",
+    actor: winnerActor,
+    body: {},
+  });
+  assert.equal(finalized.response.status, 200);
+  assert.equal(finalized.result.data.completed, true);
+  assert.equal(finalized.result.data.alreadyCompleted, false);
+  assert.equal(finalized.result.data.scoreRevealed, false);
+  // Scores stay private before publication, even from the participant themself.
+  assert.equal(
+    (await call(`/quizzes/${autosaveQuizId}/leaderboard`, { actor: winnerActor })).response
+      .status,
+    403,
+  );
+  // Publishing requires every started attempt to be submitted first.
+  assert.equal(
+    (
+      await call(`/quizzes/${autosaveQuizId}/results/publish`, {
+        method: "POST",
+        actor: accounts.admin,
+      })
+    ).response.status,
+    409,
+  );
+  // Ending the quiz early finalizes any still-open attempts from their latest
+  // persisted answers (admin termination path).
+  const endedEarly = await call(`/quizzes/${autosaveQuizId}/end-early`, {
+    method: "POST",
+    actor: accounts.admin,
+  });
+  assert.equal(endedEarly.response.status, 200);
+  assert.ok(endedEarly.result.data.finalizedAttempts >= 1);
+  await call(`/quizzes/${autosaveQuizId}/results/publish`, {
+    method: "POST",
+    actor: accounts.admin,
+  });
+  const publishedLeaderboard = await call(`/quizzes/${autosaveQuizId}/leaderboard`, {
+    actor: winnerActor,
+  });
+  assert.equal(publishedLeaderboard.response.status, 200);
+  assert.equal(publishedLeaderboard.result.data[0].score, 1);
+  const myResult = await call(`/quizzes/${autosaveQuizId}/my-result`, {
+    actor: winnerActor,
+  });
+  assert.equal(myResult.result.data.score, 1);
+  assert.equal(myResult.result.data.total, 2);
+  assert.equal(myResult.result.data.rank, 1);
+
+  // --- Fest configuration endpoint ---
+  assert.equal((await call("/fest/dates")).result.data.startsAt, null);
+  assert.equal(
+    (
+      await call("/fest/dates", {
+        method: "PUT",
+        actor: accounts.admin,
+        body: { title: "E2E Fest" },
+      })
+    ).response.status,
+    400,
+  );
+  await call("/fest/dates", {
+    method: "PUT",
+    actor: accounts.admin,
+    body: {
+      title: "E2E Fest",
+      startsAt: "2026-10-15T09:00:00.000Z",
+      endsAt: "2026-10-17T18:00:00.000Z",
+    },
+  });
+  const festDates = await call("/fest/dates");
+  assert.equal(festDates.result.data.title, "E2E Fest");
+  assert.ok(festDates.result.data.startsAt);
 
   const template = await call("/certificates/templates", {
     method: "POST",
