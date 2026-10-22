@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, festDateLabel, useFestDates } from "./api";
 import type { Event } from "./types";
 import ThemeToggle from "./ThemeToggle";
 
@@ -26,6 +26,9 @@ export default function LandingPage({
   const eventsPath = dashboardPath ? `${dashboardPath}/events` : "/login";
   const [events, setEvents] = useState<Event[]>([]);
   const [eventError, setEventError] = useState("");
+  const festDates = useFestDates();
+  const festLabel = festDateLabel(festDates);
+  const festName = festDates?.title ?? "YUKTI";
   useEffect(() => {
     void api
       .events()
@@ -59,7 +62,7 @@ export default function LandingPage({
       <section className="landing-hero">
         <div className="landing-copy">
           <span className="landing-kicker">
-            <i /> YUKTI · OCT 15–17, 2026
+            <i /> {festName} · {festLabel ?? "OCT 15–17, 2026"}
           </span>
           <h1>
             Three days.
@@ -107,7 +110,7 @@ export default function LandingPage({
           <div className="landing-date-card">
             <CalendarDays size={17} />
             <span>
-              <b>OCT 15—17</b>
+              <b>{festLabel?.split(",")[0] ?? "OCT 15—17"}</b>
               <small>Three days on campus</small>
             </span>
           </div>
@@ -255,7 +258,7 @@ export default function LandingPage({
           Explore the fest <ArrowRight size={17} />
         </Link>
         <span className="landing-final-mark">
-          <Check size={18} /> OCTOBER 15—17 · YUKTI
+          <Check size={18} /> {festLabel ?? "OCTOBER 15—17"} · {festName}
         </span>
       </section>
       <footer className="landing-footer">

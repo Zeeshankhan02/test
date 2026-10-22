@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { allow } from "../../middleware/authorize.middleware.js";
 import {
+  downloadMyCertificate,
   getMyCertificates,
   listCertificateTemplates,
   publishCertificates,
@@ -28,6 +29,8 @@ certificatesRoutes.patch(
 );
 certificatesRoutes.post("/certificates/publish", allow("admin"), publishCertificates);
 certificatesRoutes.get("/certificates/me", getMyCertificates);
+// Real PDF download; the service verifies recipient ownership + status.
+certificatesRoutes.get("/certificates/:certificateId/download", downloadMyCertificate);
 certificatesRoutes.post(
   "/certificates/:certificateId/revoke",
   allow("admin"),

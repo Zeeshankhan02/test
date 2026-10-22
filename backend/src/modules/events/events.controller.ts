@@ -74,6 +74,18 @@ export const deleteEventImageByPublicId = asyncRoute(async (req, res) => {
   return success(res, { deleted: true, publicId: decoded });
 });
 
+/**
+ * Removes the poster currently attached to one event (Cloudinary asset plus
+ * the stored fields on the document). Idempotent: an event without a poster
+ * simply reports `imageDeleted: false`.
+ */
+export const clearEventPoster = asyncRoute(async (req, res) =>
+  success(
+    res,
+    await clearEventImage(req.principal!.id, parseBody(objectId, req.params.eventId)),
+  ),
+);
+
 export const removeEvent = asyncRoute(async (req, res) =>
   success(
     res,
