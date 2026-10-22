@@ -1,5 +1,5 @@
 import express from "express";
-import helmet from "helmet";
+import * as helmet from "helmet";
 import cookieParser from "cookie-parser";
 
 /**
@@ -18,4 +18,4 @@ const parseJsonBody: express.RequestHandler = (req, res, next) =>
     return next(error);
   });
 
-export const securityMiddleware = [helmet(), parseJsonBody, cookieParser()];
+export const securityMiddleware = [helmet.default(), parseJsonBody, cookieParser()];
