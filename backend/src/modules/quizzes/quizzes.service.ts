@@ -43,6 +43,10 @@ export async function getPublishedQuizzes(userId: string, role: "student" | "adm
     }).lean()
   ).map((quiz) => ({
     ...quiz,
+    // Students need to know whether the window is still open and whether
+    // results are published; correctAnswer stays stripped above.
+    endsAt: quiz.endsAt ?? null,
+    resultsPublishedAt: quiz.resultsPublishedAt ?? null,
     questions: quiz.questions.map(({ text, options }, index) => ({
       id: String(index),
       text,

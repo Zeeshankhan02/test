@@ -45,7 +45,20 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { api, type ApiQuiz, type ApiRegistration, type EventDraft } from "./api";
+import {
+  api,
+  ApiError,
+  daysUntil,
+  festDateLabel,
+  useFestDates,
+  type ApiAdminQuiz,
+  type ApiCertificate,
+  type ApiFestDates,
+  type ApiQuiz,
+  type ApiQuizResultRow,
+  type ApiRegistration,
+  type EventDraft,
+} from "./api";
 import type { Event, Rank, Role, User, Notice } from "./types";
 import LandingPage from "./LandingPage";
 import ThemeToggle from "./ThemeToggle";
@@ -217,6 +230,9 @@ function Login({
     resetToken ? "reset" : "login",
   );
   const [notice, setNotice] = useState("");
+  const festDates = useFestDates();
+  const festLabel = festDateLabel(festDates);
+  const festName = festDates?.title ?? "YUKTI";
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -246,7 +262,8 @@ function Login({
             your mark.
           </p>
           <div className="login-date">
-            <CalendarDays size={17} /> OCT 15 — 17, 2026 <span /> YUKTI
+            <CalendarDays size={17} /> {festLabel ?? "OCT 15 — 17, 2026"}{" "}
+            <span /> {festName}
           </div>
         </div>
         <div className="promo-foot">
@@ -469,6 +486,9 @@ function Login({
 function SignupPage({ user }: { user: AppUser | null }) {
   const navigate = useNavigate();
   const { signupStudent } = useAuth();
+  const festDates = useFestDates();
+  const festLabel = festDateLabel(festDates);
+  const festName = festDates?.title ?? "YUKTI";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -535,7 +555,9 @@ function SignupPage({ user }: { user: AppUser | null }) {
             moment together.
           </p>
         </div>
-        <div className="promo-foot">YUKTI · OCTOBER 15—17, 2026</div>
+        <div className="promo-foot">
+          {festName} · {festLabel ?? "OCTOBER 15—17, 2026"}
+        </div>
         <div className="orb orb-one" />
         <div className="orb orb-two" />
       </div>
@@ -1000,6 +1022,9 @@ function PageHead({
 
 function StudentDashboard({ toast }: { toast: (s: string) => void }) {
   const [filter, setFilter] = useState("All events");
+  const festDates = useFestDates();
+  const festLabel = festDateLabel(festDates);
+  const festName = festDates?.title ?? "YUKTI";
   const { items: events, loading, error } = useEvents();
   const [registrations, setRegistrations] = useState<ApiRegistration[]>([]);
   const [registrationError, setRegistrationError] = useState("");
@@ -1025,7 +1050,7 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
       <section className="hero">
         <div className="hero-text">
           <div className="eyebrow hero-eyebrow">
-            <i /> YUKTI PRESENTS
+            <i /> {festName} PRESENTS
           </div>
           <h1>
             Where ideas
@@ -1046,7 +1071,7 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
           </div>
           <div className="hero-meta">
             <span>
-              <CalendarDays size={15} /> OCT 15 — 17, 2026
+              <CalendarDays size={15} /> {festLabel ?? "OCT 15 — 17, 2026"}
             </span>
             <span className="meta-divider" />
             <span>
@@ -1089,8 +1114,16 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
         />
         <Stat
           label="Fest starts in"
-          value="19 days"
-          detail="Thursday, October 15"
+          value={festDates?.startsAt ? daysUntil(festDates.startsAt) : "—"}
+          detail={
+            festDates?.startsAt
+              ? new Date(festDates.startsAt).toLocaleDateString(undefined, {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                })
+              : "Dates coming soon"
+          }
           icon={<Clock3 size={18} />}
           tone="peach"
         />
@@ -1101,6 +1134,16 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
           icon={<Trophy size={18} />}
           tone="mint"
         />
+      </section>
+      <section className="content-section">
+        <div className="section-heading">
+          <div>
+            <div className="eyebrow">HALL OF FAME</div>
+            <h2>Your certificates.</h2>
+            <p>Top scorers get theirs as soon as organizers publish results.</p>
+          </div>
+        </div>
+        <StudentCertificates />
       </section>
       <section className="content-section">
         <div className="section-heading">
@@ -1641,40 +1684,153 @@ function QuizzesPage({
   toast: (s: string) => void;
   quizzes: ApiQuiz[];
 }) {
-  const [quiz, setQuiz] = useState<import("./api").ApiQuiz | null>(null);
-  const [attemptId, setAttemptId] = useState("");
-  const [answers, setAnswers] = useState<number[]>([]);
-  const [questionIndex, setQuestionIndex] = useState(0);
-  const [seconds, setSeconds] = useState(0);
-  const [score, setScore] = useState<{ score: number; total: number } | null>(
+  const [play, setPlay] = useState<import("./api").ApiAttemptSnapshot | null>(
     null,
   );
+  const [questionIndex, setQuestionIndex] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+  const [finished, setFinished] = useState<{
+    scoreRevealed: boolean;
+    score: number | null;
+    total: number | null;
+  } | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const active = quizzes[0];
+  const active = quizzes.find((q) => q.status === "published") ?? quizzes[0];
+  const serverOffset = useRef(0);
+  const finalizedRef = useRef(false);
+
+  // tick every second while playing so server deadlines drive the UI
   useEffect(() => {
-    if (!quiz) return;
-    const timer = window.setInterval(
-      () => setSeconds((value) => Math.max(0, value - 1)),
-      1000,
-    );
+    if (!play) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
-  }, [quiz]);
+  }, [play]);
+
+  const remainingMs = (deadline: string | null | undefined) =>
+    deadline
+      ? new Date(deadline).getTime() - (now + serverOffset.current)
+      : Infinity;
+  const overallRemainingMs = remainingMs(play?.overallDeadline);
+  const questionRemainingMs = remainingMs(
+    play?.questionDeadlines[questionIndex],
+  );
+  const playSeconds = Math.max(
+    0,
+    Math.ceil(Math.min(overallRemainingMs, questionRemainingMs) / 1000),
+  );
+
+  const applySnapshot = (snapshot: import("./api").ApiAttemptSnapshot) => {
+    serverOffset.current = new Date(snapshot.serverTime).getTime() - Date.now();
+    setNow(Date.now());
+    setPlay(snapshot);
+  };
+
+  const loadResult = async (quizId: string) => {
+    try {
+      const result = await api.myQuizResult(quizId);
+      setFinished({
+        scoreRevealed: true,
+        score: result.score,
+        total: result.total,
+      });
+    } catch {
+      // results not published yet — show a pending banner instead
+      setFinished({ scoreRevealed: false, score: null, total: null });
+    }
+  };
+
+  // restore an in-progress attempt when mounting (page refresh safety)
   useEffect(() => {
-    if (quiz && seconds === 0) setQuiz(null);
-  }, [quiz, seconds]);
+    if (!active) return;
+    let cancelled = false;
+    void api
+      .startQuiz(active._id)
+      .then((snapshot) => {
+        if (cancelled) return;
+        if (snapshot.resumed) {
+          applySnapshot(snapshot);
+          if (snapshot.answers.length > 0) setQuestionIndex(0);
+        } else if (snapshot.status === "completed") {
+          void loadResult(active._id);
+        }
+      })
+      .catch(() => {
+        /* no attempt / quiz not open — user can still press Start */
+      });
+    return () => {
+      cancelled = true;
+    };
+    // resume-on-mount: intentionally runs only once
+  }, []);
+
+  const finalize = async (attemptId: string) => {
+    if (finalizedRef.current) return;
+    finalizedRef.current = true;
+    try {
+      const outcome = await api.finishAttempt(attemptId);
+      setPlay(null);
+      if (outcome.scoreRevealed) {
+        await loadResult(active?._id ?? "");
+      } else {
+        setFinished({ scoreRevealed: false, score: null, total: null });
+      }
+      toast(
+        outcome.alreadyCompleted
+          ? "Quiz already submitted."
+          : "Quiz submitted!",
+      );
+    } catch (cause) {
+      finalizedRef.current = false;
+      setError(
+        cause instanceof Error ? cause.message : "Could not submit quiz.",
+      );
+    }
+  };
+
+  // auto-finalize when the overall server deadline passes
+  useEffect(() => {
+    if (play && overallRemainingMs <= 0) void finalize(play.attemptId);
+    // finalize() is stable per attempt; re-running on every tick is wasteful
+  }, [play, overallRemainingMs <= 0]);
+
+  const saveAnswer = async (index: number, answer: number) => {
+    if (!play) return;
+    setPlay({
+      ...play,
+      answers: play.answers.map((a, i) => (i === index ? answer : a)),
+    });
+    setError("");
+    try {
+      const res = await api.saveAttemptAnswer(play.attemptId, index, answer);
+      if (res.locked) {
+        setError(
+          `That question was locked before your answer saved (${res.reason ?? "too late"}).`,
+        );
+        void api
+          .attemptState(play.attemptId)
+          .then(applySnapshot)
+          .catch(() => {});
+      }
+    } catch (cause) {
+      setError(
+        cause instanceof Error ? cause.message : "Could not save your answer.",
+      );
+    }
+  };
+
   const start = async () => {
     if (!active || busy) return;
     setBusy(true);
     setError("");
+    setFinished(null);
+    finalizedRef.current = false;
     try {
-      const result = await api.startQuiz(active._id);
-      setQuiz({ ...result.quiz, _id: active._id, status: "published" });
-      setAttemptId(result.attemptId);
-      setAnswers([]);
+      const snapshot = await api.startQuiz(active._id);
+      applySnapshot(snapshot);
       setQuestionIndex(0);
-      setScore(null);
-      setSeconds(result.quiz.durationSeconds);
+      if (snapshot.endedByAdmin)
+        toast("This quiz was ended early by the organizers.");
     } catch (cause) {
       setError(
         cause instanceof Error ? cause.message : "Could not start quiz.",
@@ -1683,31 +1839,8 @@ function QuizzesPage({
       setBusy(false);
     }
   };
-  const submit = async () => {
-    if (
-      !quiz ||
-      !attemptId ||
-      answers.length !== quiz.questions.length ||
-      answers.some((value) => value === undefined)
-    ) {
-      setError("Answer every question before submitting.");
-      return;
-    }
-    setBusy(true);
-    setError("");
-    try {
-      setScore(await api.submitQuiz(attemptId, answers));
-      setQuiz(null);
-      toast("Quiz submitted. Your score is ready.");
-    } catch (cause) {
-      setError(
-        cause instanceof Error ? cause.message : "Could not submit quiz.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-  const question = quiz?.questions[questionIndex];
+  const question = play?.quiz.questions[questionIndex];
+  const chosenAnswers = play?.answers ?? [];
   return (
     <>
       <PageHead
@@ -1720,7 +1853,7 @@ function QuizzesPage({
           {error}
         </p>
       )}
-      {!active && !quiz ? (
+      {!active && !play ? (
         <Empty
           icon={<CircleHelp />}
           title="No live quizzes"
@@ -1739,8 +1872,8 @@ function QuizzesPage({
                 <CircleHelp size={33} />
               </div>
               <span className="quiz-cover-note">
-                {quiz
-                  ? `QUESTION ${questionIndex + 1} / ${quiz.questions.length}`
+                {play
+                  ? `QUESTION ${questionIndex + 1} / ${play.quiz.questions.length}`
                   : "READY TO PLAY"}
               </span>
             </div>
@@ -1752,37 +1885,50 @@ function QuizzesPage({
               <span>·</span>
               <span>
                 <Clock3 size={13} />{" "}
-                {quiz?.durationSeconds ?? active?.durationSeconds ?? 0} SEC
+                {play?.quiz.durationSeconds ?? active?.durationSeconds ?? 0} SEC
               </span>
               <span>·</span>
               <span>
-                {quiz?.questions.length ?? active?.questions.length ?? 0}{" "}
+                {play?.quiz.questions.length ?? active?.questions.length ?? 0}{" "}
                 QUESTIONS
               </span>
             </div>
-            <h2>{quiz?.title || active?.title}</h2>
+            <h2>{play?.quiz.title || active?.title}</h2>
             <p>
-              Choose your answers before the timer runs out. Your score is
-              calculated by the server.
+              Choose your answers before the timer runs out. Every answer is
+              saved as you go — your score is calculated by the server.
             </p>
-            {quiz && question ? (
+            {finished && !play ? (
+              finished.scoreRevealed ? (
+                <div className="quiz-bottom">
+                  <b>
+                    Your score: {finished.score} / {finished.total}
+                  </b>
+                </div>
+              ) : (
+                <div className="quiz-bottom">
+                  <b>Submitted!</b> Scores will appear once the organizers
+                  publish results.
+                </div>
+              )
+            ) : play && question ? (
               <div className="quiz-question">
                 <div className="quiz-progress">
                   <span>
-                    QUESTION {questionIndex + 1} OF {quiz.questions.length}
+                    QUESTION {questionIndex + 1} OF {play.quiz.questions.length}
                   </span>
-                  <b className={seconds < 15 ? "timer-warning" : ""}>
+                  <b className={playSeconds < 15 ? "timer-warning" : ""}>
                     <Clock3 size={14} />{" "}
-                    {Math.floor(seconds / 60)
+                    {Math.floor(playSeconds / 60)
                       .toString()
                       .padStart(2, "0")}
-                    :{String(seconds % 60).padStart(2, "0")}
+                    :{String(playSeconds % 60).padStart(2, "0")}
                   </b>
                 </div>
                 <div className="progress-track">
                   <i
                     style={{
-                      width: `${((questionIndex + 1) / quiz.questions.length) * 100}%`,
+                      width: `${((questionIndex + 1) / play.quiz.questions.length) * 100}%`,
                     }}
                   />
                 </div>
@@ -1792,23 +1938,15 @@ function QuizzesPage({
                     <button
                       key={option}
                       className={
-                        answers[questionIndex] === index ? "chosen" : ""
+                        chosenAnswers[questionIndex] === index ? "chosen" : ""
                       }
-                      onClick={() =>
-                        setAnswers((current) =>
-                          current
-                            .map((answer, i) =>
-                              i === questionIndex ? index : answer,
-                            )
-                            .concat(
-                              current.length <= questionIndex ? [index] : [],
-                            ),
-                        )
-                      }
+                      onClick={() => void saveAnswer(questionIndex, index)}
                     >
                       <span>{String.fromCharCode(65 + index)}</span>
                       {option}
-                      {answers[questionIndex] === index && <Check size={15} />}
+                      {chosenAnswers[questionIndex] === index && (
+                        <Check size={15} />
+                      )}
                     </button>
                   ))}
                 </div>
@@ -1820,10 +1958,10 @@ function QuizzesPage({
                   >
                     Previous
                   </button>
-                  {questionIndex < quiz.questions.length - 1 ? (
+                  {questionIndex < play.quiz.questions.length - 1 ? (
                     <button
                       className="btn btn-dark"
-                      disabled={answers[questionIndex] === undefined}
+                      disabled={chosenAnswers[questionIndex] === undefined}
                       onClick={() => setQuestionIndex((current) => current + 1)}
                     >
                       Next question <ArrowRight size={15} />
@@ -1831,12 +1969,15 @@ function QuizzesPage({
                   ) : (
                     <button
                       className="btn btn-dark"
-                      disabled={
-                        busy || answers.length !== quiz.questions.length
-                      }
-                      onClick={() => void submit()}
+                      disabled={busy}
+                      onClick={() => {
+                        setBusy(true);
+                        void finalize(play.attemptId).finally(() =>
+                          setBusy(false),
+                        );
+                      }}
                     >
-                      {busy ? "Submitting…" : "Submit quiz"}{" "}
+                      {busy ? "Submitting…" : "Finish quiz"}{" "}
                       <ArrowRight size={15} />
                     </button>
                   )}
@@ -1845,18 +1986,16 @@ function QuizzesPage({
             ) : (
               <button
                 className="btn btn-dark"
-                disabled={busy}
+                disabled={busy || active?.status !== "published"}
                 onClick={() => void start()}
               >
-                {busy ? "Starting…" : "Start the quiz"} <ArrowRight size={16} />
+                {busy
+                  ? "Starting…"
+                  : active?.status === "published"
+                    ? "Start the quiz"
+                    : "Quiz window closed"}{" "}
+                <ArrowRight size={16} />
               </button>
-            )}
-            {score && (
-              <div className="quiz-bottom">
-                <b>
-                  Your score: {score.score} / {score.total}
-                </b>
-              </div>
             )}
           </div>
         </div>
@@ -1868,13 +2007,28 @@ function QuizzesPage({
 function LeaderboardPage() {
   const [rows, setRows] = useState<Rank[]>([]);
   const [error, setError] = useState("");
+  const [pendingResults, setPendingResults] = useState(false);
   const { user } = useAuth();
   useEffect(() => {
     void api
       .quizzes()
       .then(async (quizzes) => {
-        if (!quizzes[0]) return [];
-        return api.leaderboard(quizzes[0]._id);
+        const quiz =
+          quizzes.find((q) => q.status === "published") ?? quizzes[0];
+        if (!quiz) return [];
+        try {
+          return await api.leaderboard(quiz._id);
+        } catch (cause) {
+          // Feature 3: results stay hidden until an admin publishes them.
+          if (
+            cause instanceof ApiError &&
+            cause.code === "RESULTS_NOT_PUBLISHED"
+          ) {
+            setPendingResults(true);
+            return [];
+          }
+          throw cause;
+        }
       })
       .then((result) =>
         setRows(
@@ -1962,7 +2116,14 @@ function LeaderboardPage() {
             {error}
           </p>
         )}
-        {!rows.length && !error && (
+        {pendingResults && (
+          <p className="leaderboard-pending">
+            <Clock3 size={15} /> Results haven&apos;t been published yet. The
+            leaderboard unlocks as soon as the organizers announce scores —
+            watch for a notification!
+          </p>
+        )}
+        {!rows.length && !error && !pendingResults && (
           <p>No quiz scores have been submitted yet.</p>
         )}
         <div className="leader-foot">
@@ -2693,6 +2854,16 @@ function AdminDashboard({ toast }: { toast: (s: string) => void }) {
           </Link>
         </div>
       </div>
+      <div className="content-section">
+        <div className="section-heading">
+          <div>
+            <div className="eyebrow">FEST CONFIGURATION</div>
+            <h2>Fest dates.</h2>
+            <p>Shown across the landing page and student dashboards.</p>
+          </div>
+        </div>
+        <FestDatesCard toast={toast} />
+      </div>
       <div className="admin-announcement">
         <div className="announce-mark">
           <Bell size={20} />
@@ -2855,7 +3026,10 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                     setStartsAt(localDate(record.startsAt));
                     setEndsAt(localDate(record.endsAt));
                     setCapacity(record.capacity);
-                    resetImageState(record.image || "", record.imagePublicId || "");
+                    resetImageState(
+                      record.image || "",
+                      record.imagePublicId || "",
+                    );
                     setModal(true);
                   })
                   .catch((cause: unknown) =>
@@ -2929,7 +3103,12 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                 aria-label="Delete event"
                 title="Delete event (removes its Cloudinary image too)"
                 onClick={() => {
-                  if (!window.confirm(`Delete “${e.title}”? Its image will also be removed from Cloudinary.`)) return;
+                  if (
+                    !window.confirm(
+                      `Delete “${e.title}”? Its image will also be removed from Cloudinary.`,
+                    )
+                  )
+                    return;
                   void api
                     .deleteEvent(e.id)
                     .then(() => {
@@ -2996,8 +3175,7 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                     setImageFile(null);
                     setImagePreview("");
                     setImagePublicId("");
-                    if (imageInputRef.current)
-                      imageInputRef.current.value = "";
+                    if (imageInputRef.current) imageInputRef.current.value = "";
                   }}
                 >
                   Remove preview
@@ -3774,6 +3952,7 @@ function QuizBuilder({ toast }: { toast: (s: string) => void }) {
           </div>
         </aside>
       </div>
+      <QuizManager toast={toast} />
       {preview && (
         <Modal title="Quiz preview" close={() => setPreview(false)}>
           <h2>{title || "Untitled quiz"}</h2>
@@ -3798,6 +3977,413 @@ function QuizBuilder({ toast }: { toast: (s: string) => void }) {
         </Modal>
       )}
     </>
+  );
+}
+
+function FestDatesCard({ toast }: { toast: (s: string) => void }) {
+  const [dates, setDates] = useState<ApiFestDates | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [title, setTitle] = useState("");
+  const [startsAt, setStartsAt] = useState("");
+  const [endsAt, setEndsAt] = useState("");
+  const [venue, setVenue] = useState("");
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    void api
+      .festDates()
+      .then((value) => {
+        setDates(value);
+        setTitle(value?.title ?? "");
+        setStartsAt(toLocalInput(value?.startsAt));
+        setEndsAt(toLocalInput(value?.endsAt));
+        setVenue(value?.venue ?? "");
+      })
+      .catch(() => undefined)
+      .finally(() => setLoaded(true));
+  }, []);
+  const save = () => {
+    if (!startsAt || !endsAt) {
+      toast("Pick both a start and an end date");
+      return;
+    }
+    setSaving(true);
+    void api
+      .saveFestDates({
+        title: title.trim() || undefined,
+        startsAt: new Date(startsAt).toISOString(),
+        endsAt: new Date(endsAt).toISOString(),
+        venue: venue.trim() || undefined,
+      })
+      .then((value) => {
+        setDates(value);
+        toast("Fest dates saved");
+      })
+      .catch((cause: unknown) =>
+        toast(
+          cause instanceof Error ? cause.message : "Could not save fest dates.",
+        ),
+      )
+      .finally(() => setSaving(false));
+  };
+  const label = festDateLabel(dates);
+  return (
+    <div className="panel fest-dates-card bg-white text-zinc-900 border-zinc-200 dark:bg-zinc-900 dark:text-zinc-100 dark:border-zinc-800">
+      <span className="section-kicker">FEST SCHEDULE</span>
+      <h3>{dates?.title || "YUKTI"}</h3>
+      <p>
+        <CalendarDays size={15} />{" "}
+        {label ?? "No dates configured yet — students see the default."}
+        {dates?.venue ? ` · ${dates.venue}` : ""}
+      </p>
+      <div className="fest-dates-form">
+        <label>
+          FEST NAME
+          <input
+            className="bg-white text-zinc-900 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:border-zinc-700"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="YUKTI"
+          />
+        </label>
+        <label>
+          STARTS
+          <input
+            type="datetime-local"
+            className="bg-white text-zinc-900 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:border-zinc-700"
+            value={startsAt}
+            onChange={(e) => setStartsAt(e.target.value)}
+          />
+        </label>
+        <label>
+          ENDS
+          <input
+            type="datetime-local"
+            className="bg-white text-zinc-900 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:border-zinc-700"
+            value={endsAt}
+            onChange={(e) => setEndsAt(e.target.value)}
+          />
+        </label>
+        <label>
+          VENUE
+          <input
+            className="bg-white text-zinc-900 border-zinc-200 dark:bg-zinc-800 dark:text-zinc-100 dark:border-zinc-700"
+            value={venue}
+            onChange={(e) => setVenue(e.target.value)}
+            placeholder="Main campus auditorium"
+          />
+        </label>
+      </div>
+      <button
+        className="btn btn-dark"
+        disabled={saving || !loaded}
+        onClick={save}
+      >
+        {saving ? "Saving…" : "Save fest dates"} <ArrowRight size={15} />
+      </button>
+    </div>
+  );
+}
+
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function QuizManager({ toast }: { toast: (s: string) => void }) {
+  const [quizzes, setQuizzes] = useState<ApiAdminQuiz[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [busyId, setBusyId] = useState("");
+  const [rowsFor, setRowsFor] = useState<{
+    quiz: ApiAdminQuiz;
+    rows: ApiQuizResultRow[];
+  } | null>(null);
+  const refresh = () => {
+    setLoading(true);
+    void api
+      .adminQuizzes()
+      .then(setQuizzes)
+      .catch((cause: unknown) =>
+        setError(
+          cause instanceof Error ? cause.message : "Could not load quizzes.",
+        ),
+      )
+      .finally(() => setLoading(false));
+  };
+  useEffect(refresh, []);
+  const runAction = (
+    quiz: ApiAdminQuiz,
+    action: () => Promise<unknown>,
+    done: string,
+  ) => {
+    setBusyId(quiz.id);
+    void action()
+      .then(() => {
+        toast(done);
+        refresh();
+      })
+      .catch((cause: unknown) =>
+        toast(cause instanceof Error ? cause.message : "That didn’t work."),
+      )
+      .finally(() => setBusyId(""));
+  };
+  const viewResults = (quiz: ApiAdminQuiz) => {
+    setBusyId(quiz.id);
+    void api
+      .quizResultRows(quiz.id)
+      .then((rows) => setRowsFor({ quiz, rows }))
+      .catch((cause: unknown) =>
+        toast(
+          cause instanceof Error ? cause.message : "Could not load results.",
+        ),
+      )
+      .finally(() => setBusyId(""));
+  };
+  return (
+    <>
+      <PageHead
+        eyebrow="LIFECYCLE CONTROL"
+        title="Manage quizzes"
+        description="Publish windows, close early, and release results when you're ready."
+      />
+      {loading && <p role="status">Loading quizzes…</p>}
+      {error && (
+        <p className="auth-error" role="alert">
+          {error}
+        </p>
+      )}
+      {!loading && !quizzes.length && !error && (
+        <p>No quizzes yet — build one above and it will appear here.</p>
+      )}
+      <div className="quiz-admin-list">
+        {quizzes.map((quiz) => (
+          <div
+            key={quiz.id}
+            className="panel quiz-admin-row bg-white text-zinc-900 border-zinc-200 dark:bg-zinc-900 dark:text-zinc-100 dark:border-zinc-800"
+          >
+            <div className="quiz-admin-info">
+              <b>{quiz.title}</b>
+              <small>
+                {quiz.eventTitle} · {quiz.startedAttempts} started ·{" "}
+                {quiz.submittedAttempts} submitted
+                {quiz.pendingEvaluations
+                  ? ` · ${quiz.pendingEvaluations} pending`
+                  : ""}
+              </small>
+              <span
+                className={`quiz-status-pill status-${quiz.status} ${
+                  quiz.resultsPublishedAt ? "results-published" : ""
+                }`}
+              >
+                {quiz.status === "draft"
+                  ? "DRAFT"
+                  : quiz.status === "published"
+                    ? quiz.endsAt && new Date(quiz.endsAt) < new Date()
+                      ? "WINDOW CLOSED"
+                      : "LIVE"
+                    : "CLOSED"}
+                {quiz.resultsPublishedAt
+                  ? " · RESULTS PUBLISHED"
+                  : quiz.status !== "draft"
+                    ? " · RESULTS PENDING"
+                    : ""}
+              </span>
+            </div>
+            <div className="quiz-admin-actions">
+              {busyId === quiz.id && <small>Working…</small>}
+              {quiz.status === "draft" && (
+                <button
+                  className="btn btn-outline"
+                  disabled={!!busyId}
+                  onClick={() =>
+                    runAction(
+                      quiz,
+                      () => api.publishQuiz(quiz.id),
+                      "Quiz published",
+                    )
+                  }
+                >
+                  Publish
+                </button>
+              )}
+              {quiz.status === "published" && (
+                <button
+                  className="btn btn-outline"
+                  disabled={!!busyId}
+                  onClick={() =>
+                    runAction(
+                      quiz,
+                      () => api.endQuizEarly(quiz.id),
+                      "Quiz window closed early",
+                    )
+                  }
+                >
+                  End early
+                </button>
+              )}
+              {quiz.status !== "draft" && !quiz.resultsPublishedAt && (
+                <button
+                  className="btn btn-dark"
+                  disabled={!!busyId}
+                  onClick={() =>
+                    runAction(
+                      quiz,
+                      () => api.publishQuizResults(quiz.id),
+                      "Results published",
+                    )
+                  }
+                >
+                  Publish results
+                </button>
+              )}
+              {quiz.status !== "draft" && quiz.resultsPublishedAt && (
+                <button
+                  className="btn btn-outline"
+                  disabled={!!busyId}
+                  onClick={() =>
+                    runAction(
+                      quiz,
+                      () => api.announceQuizResults(quiz.id),
+                      "Results announced to students",
+                    )
+                  }
+                >
+                  {quiz.resultsAnnouncedAt ? "Re-send" : "Announce"}
+                </button>
+              )}
+              {quiz.status !== "draft" && (
+                <button
+                  className="text-link"
+                  disabled={!!busyId}
+                  onClick={() => viewResults(quiz)}
+                >
+                  View results
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+      {rowsFor && (
+        <Modal
+          title={`Results — ${rowsFor.quiz.title}`}
+          close={() => setRowsFor(null)}
+        >
+          <div className="rank-table">
+            <div className="rank-header">
+              <span>RANK</span>
+              <span>PARTICIPANT</span>
+              <span>SCORE</span>
+              <span>TIME</span>
+            </div>
+            {rowsFor.rows.map((row) => (
+              <div className="rank-row" key={row.rank}>
+                <b className="rank-num">{String(row.rank).padStart(2, "0")}</b>
+                <div className="rank-person">
+                  <b>{row.userName}</b>
+                </div>
+                <b className="rank-score">
+                  {row.score}/{row.total}
+                </b>
+                <span className="rank-time">
+                  {row.timeTakenSeconds != null
+                    ? `${Math.floor(row.timeTakenSeconds / 60)}m ${row.timeTakenSeconds % 60}s`
+                    : "—"}
+                </span>
+              </div>
+            ))}
+            {!rowsFor.rows.length && <p>No finished attempts yet.</p>}
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+function StudentCertificates() {
+  const [certificates, setCertificates] = useState<ApiCertificate[] | null>(
+    null,
+  );
+  const [error, setError] = useState("");
+  const [downloading, setDownloading] = useState("");
+  useEffect(() => {
+    void api
+      .myCertificates()
+      .then(setCertificates)
+      .catch((cause: unknown) => {
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not load certificates.",
+        );
+        setCertificates([]);
+      });
+  }, []);
+  if (error) {
+    return (
+      <p className="auth-error" role="alert">
+        {error}
+      </p>
+    );
+  }
+  if (!certificates) {
+    return <p role="status">Loading certificates…</p>;
+  }
+  if (!certificates.length) {
+    return (
+      <p>
+        No certificates yet — top scorers get theirs as soon as organizers
+        publish them.
+      </p>
+    );
+  }
+  return (
+    <div className="certificate-list">
+      {certificates.map((certificate) => {
+        const template =
+          typeof certificate.templateId === "object"
+            ? certificate.templateId
+            : null;
+        return (
+          <div
+            key={certificate._id}
+            className="panel certificate-card bg-white text-zinc-900 border-zinc-200 dark:bg-zinc-900 dark:text-zinc-100 dark:border-zinc-800"
+          >
+            <Trophy size={20} />
+            <div>
+              <b>{template?.title ?? "Participation certificate"}</b>
+              <small>
+                {certificate.certificateId} · issued{" "}
+                {new Date(certificate.issuedAt).toLocaleDateString()}
+              </small>
+            </div>
+            <button
+              className="btn btn-outline"
+              disabled={downloading === certificate._id}
+              onClick={() => {
+                setDownloading(certificate._id);
+                void api
+                  .downloadCertificate(certificate._id)
+                  .catch((cause: unknown) =>
+                    setError(
+                      cause instanceof Error
+                        ? cause.message
+                        : "Could not download certificate.",
+                    ),
+                  )
+                  .finally(() => setDownloading(""));
+              }}
+            >
+              <Download size={15} />{" "}
+              {downloading === certificate._id ? "Downloading…" : "Download"}
+            </button>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
