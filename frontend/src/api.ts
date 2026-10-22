@@ -6,7 +6,7 @@ import { io } from "socket.io-client";
 let festDatesCache: ApiFestDates | null | undefined;
 export function useFestDates(): ApiFestDates | null {
   const [dates, setDates] = useState<ApiFestDates | null>(
-    festDatesCache ?? null,
+    festDatesCache ?? null
   );
   useEffect(() => {
     if (festDatesCache !== undefined) return;
@@ -31,7 +31,7 @@ export function daysUntil(iso: string): string {
   const diff = Math.floor(
     (Date.UTC(target.getFullYear(), target.getMonth(), target.getDate()) -
       Date.UTC(now.getFullYear(), now.getMonth(), now.getDate())) /
-      dayMs,
+      dayMs
   );
   if (diff <= 0) return "starts today";
   if (diff === 1) return "1 day";
@@ -50,7 +50,9 @@ export function festDateLabel(dates: ApiFestDates | null): string | null {
   ) {
     return `${month} ${start.getDate()} — ${end.getDate()}, ${end.getFullYear()}`;
   }
-  return `${month} ${start.getDate()} — ${end.toLocaleString("en", { month: "short" }).toUpperCase()} ${end.getDate()}, ${end.getFullYear()}`;
+  return `${month} ${start.getDate()} — ${end
+    .toLocaleString("en", { month: "short" })
+    .toUpperCase()} ${end.getDate()}, ${end.getFullYear()}`;
 }
 
 const baseUrl = (
@@ -91,7 +93,7 @@ export class ApiError extends Error {
   constructor(
     message: string,
     public readonly status: number,
-    public readonly code?: string,
+    public readonly code?: string
   ) {
     super(message);
     this.name = "ApiError";
@@ -100,7 +102,7 @@ export class ApiError extends Error {
 
 async function raw<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  if (init.body && !headers.has("Content-Type"))
+  if (typeof init.body === "string" && !headers.has("Content-Type"))
     headers.set("Content-Type", "application/json");
   if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
   const response = await fetch(`${baseUrl}${path}`, {
@@ -109,12 +111,13 @@ async function raw<T>(path: string, init: RequestInit = {}): Promise<T> {
     credentials: "include",
   });
   const result = (await response.json().catch(() => null)) as
-    (Envelope<T> & { message?: string; error?: { code?: string } }) | null;
+    | (Envelope<T> & { message?: string; error?: { code?: string } })
+    | null;
   if (!response.ok)
     throw new ApiError(
       result?.message || `Request failed (${response.status})`,
       response.status,
-      result?.error?.code,
+      result?.error?.code
     );
   return (result as Envelope<T>).data;
 }
@@ -125,7 +128,7 @@ export async function refreshSession() {
       try {
         const session = await raw<{ accessToken: string; user: ApiUser }>(
           "/auth/refresh",
-          { method: "POST" },
+          { method: "POST" }
         );
         accessToken = session.accessToken;
         return session;
@@ -143,7 +146,7 @@ export async function refreshSession() {
 async function request<T>(
   path: string,
   init: RequestInit = {},
-  retry = true,
+  retry = true
 ): Promise<T> {
   try {
     return await raw<T>(path, init);
@@ -169,7 +172,7 @@ export const api = {
   async login(email: string, password: string) {
     const session = await raw<{ accessToken: string; user: ApiUser }>(
       "/auth/login",
-      json("POST", { email, password }),
+      json("POST", { email, password })
     );
     accessToken = session.accessToken;
     return toUser(session.user);
@@ -177,7 +180,7 @@ export const api = {
   async signup(name: string, email: string, password: string) {
     const session = await raw<{ accessToken: string; user: ApiUser }>(
       "/auth/signup",
-      json("POST", { name, email, password }),
+      json("POST", { name, email, password })
     );
     accessToken = session.accessToken;
     return toUser(session.user);
@@ -192,29 +195,29 @@ export const api = {
   async changePassword(currentPassword: string, newPassword: string) {
     await request(
       "/auth/password",
-      json("PATCH", { currentPassword, newPassword }),
+      json("PATCH", { currentPassword, newPassword })
     );
     accessToken = null;
   },
   requestPasswordReset: (email: string) =>
     request<{ message: string }>(
       "/auth/password/forgot",
-      json("POST", { email }),
+      json("POST", { email })
     ),
   resetPassword: (token: string, password: string) =>
     request<{ changed: boolean }>(
       "/auth/password/reset",
-      json("POST", { token, password }),
+      json("POST", { token, password })
     ),
   events: async (
-    filters: { q?: string; category?: string; limit?: number } = {},
+    filters: { q?: string; category?: string; limit?: number } = {}
   ) => {
     const query = new URLSearchParams();
     if (filters.q) query.set("q", filters.q);
     if (filters.category) query.set("category", filters.category);
     if (filters.limit) query.set("limit", String(filters.limit));
     const result = await request<ApiEvent[] | { data: ApiEvent[] }>(
-      `/events${query.size ? `?${query}` : ""}`,
+      `/events${query.size ? `?${query}` : ""}`
     );
     const rows = Array.isArray(result) ? result : result.data;
     return rows.map(toEvent);
@@ -237,7 +240,7 @@ export const api = {
   deleteEventImage: (publicId: string) =>
     request<{ deleted: boolean }>(
       `/events/images/${encodeURIComponent(publicId)}`,
-      json("DELETE"),
+      json("DELETE")
     ),
   deleteEvent: (id: string) =>
     request<{ deleted: boolean }>(`/events/${id}`, json("DELETE")),
@@ -255,7 +258,7 @@ export const api = {
       ticket: { credential: string };
     }>(
       `/events/${eventId}/register`,
-      json("POST", { members, ...(teamName ? { teamName } : {}) }),
+      json("POST", { members, ...(teamName ? { teamName } : {}) })
     ),
   registrations: () => request<ApiRegistration[]>("/registrations/me"),
   eventRegistrations: (eventId: string) =>
@@ -267,7 +270,7 @@ export const api = {
       request<ApiRegistration[]>("/registrations/me"),
     ]);
     const byId = new Map(
-      registrations.map((registration) => [registration._id, registration]),
+      registrations.map((registration) => [registration._id, registration])
     );
     return Promise.all(
       tickets.map(async (ticket) => {
@@ -278,9 +281,9 @@ export const api = {
           registration,
           event: await api.event(registration.eventId),
         };
-      }),
+      })
     ).then((rows) =>
-      rows.filter((row): row is NonNullable<typeof row> => row !== null),
+      rows.filter((row): row is NonNullable<typeof row> => row !== null)
     );
   },
   cancelRegistration: (id: string) =>
@@ -308,8 +311,8 @@ export const api = {
         scan.status === "valid_entry"
           ? "valid_entry"
           : scan.status === "already_scanned"
-            ? "duplicate"
-            : "invalid",
+          ? "duplicate"
+          : "invalid",
     })),
   volunteerSummary: () =>
     request<{
@@ -330,14 +333,14 @@ export const api = {
   createVolunteer: async (email: string, password: string) => {
     const volunteer = await request<ApiVolunteer>(
       "/volunteers",
-      json("POST", { email, name: displayName(email), password }),
+      json("POST", { email, name: displayName(email), password })
     );
     return { volunteer: toVolunteer(volunteer), password };
   },
   setVolunteerStatus: (id: string, status: Volunteer["status"]) =>
     request(
       `/volunteers/${id}/status`,
-      json("PATCH", { active: status === "active" }),
+      json("PATCH", { active: status === "active" })
     ),
   notices: async () =>
     (await request<ApiNotice[]>("/notifications")).map((notice) => ({
@@ -362,7 +365,7 @@ export const api = {
         message: row.message,
         timestamp: row.createdAt,
         isRead: row.isRead,
-      }),
+      })
     );
     return () => socket.disconnect();
   },
@@ -371,11 +374,11 @@ export const api = {
   announce: (
     title: string,
     message: string,
-    audience: "students" | "volunteers" | "all",
+    audience: "students" | "volunteers" | "all"
   ) =>
     request<{ delivered: number }>(
       "/notifications",
-      json("POST", { title, message, audience }),
+      json("POST", { title, message, audience })
     ),
   dashboard: () => request<ApiDashboard>("/admin/dashboard"),
   participants: (
@@ -384,13 +387,13 @@ export const api = {
       limit?: number;
       status?: string;
       eventId?: string;
-    } = {},
+    } = {}
   ) => {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(filters))
       if (value !== undefined && value !== "") query.set(key, String(value));
     return request<ApiRegistration[]>(
-      `/registrations${query.size ? `?${query}` : ""}`,
+      `/registrations${query.size ? `?${query}` : ""}`
     );
   },
   festDates: () => request<ApiFestDates | null>("/fest/dates"),
@@ -411,14 +414,14 @@ export const api = {
       title: string;
       durationSeconds: number;
       questions: { text: string; options: string[]; correctAnswer: number }[];
-    }>,
+    }>
   ) => request<ApiQuiz>(`/quizzes/${id}`, json("PATCH", value)),
   publishQuiz: (id: string) =>
     request<ApiQuiz>(`/quizzes/${id}/publish`, json("POST")),
   closeQuiz: (id: string) =>
     request<{ id: string; status: string }>(
       `/quizzes/${id}/close`,
-      json("POST"),
+      json("POST")
     ),
   adminQuizzes: () => request<ApiAdminQuiz[]>("/quizzes/admin/list"),
   quizResultsSummary: (id: string) =>
@@ -428,19 +431,19 @@ export const api = {
   publishQuizResults: (id: string) =>
     request<{ alreadyPublished: boolean; resultsPublishedAt: string }>(
       `/quizzes/${id}/results/publish`,
-      json("POST"),
+      json("POST")
     ),
   announceQuizResults: (id: string) =>
     request<{ delivered: number; alreadyAnnounced: boolean }>(
       `/quizzes/${id}/results/announce`,
-      json("POST"),
+      json("POST")
     ),
   endQuizEarly: (id: string) =>
     request<unknown>(`/quizzes/${id}/end-early`, json("POST")),
   retryQuizFinalization: (id: string) =>
     request<{ finalizedAttempts: number; pendingAttempts: number }>(
       `/quizzes/${id}/finalize/retry`,
-      json("POST"),
+      json("POST")
     ),
   myQuizResult: (id: string) =>
     request<ApiQuizResult>(`/quizzes/${id}/my-result`),
@@ -451,7 +454,7 @@ export const api = {
   saveAttemptAnswer: (
     attemptId: string,
     index: number,
-    answer: number | null,
+    answer: number | null
   ) =>
     request<{
       index: number;
@@ -481,24 +484,24 @@ export const api = {
   certificateTemplates: () =>
     request<ApiCertificateTemplate[]>("/certificates/templates"),
   createCertificateTemplate: (
-    value: Omit<ApiCertificateTemplate, "_id" | "status" | "createdAt">,
+    value: Omit<ApiCertificateTemplate, "_id" | "status" | "createdAt">
   ) =>
     request<ApiCertificateTemplate>(
       "/certificates/templates",
-      json("POST", value),
+      json("POST", value)
     ),
   updateCertificateTemplate: (
     id: string,
-    value: Omit<ApiCertificateTemplate, "_id" | "status" | "createdAt">,
+    value: Omit<ApiCertificateTemplate, "_id" | "status" | "createdAt">
   ) =>
     request<ApiCertificateTemplate>(
       `/certificates/templates/${id}`,
-      json("PATCH", value),
+      json("PATCH", value)
     ),
   publishCertificates: (templateId: string) =>
     request<{ published: number }>(
       "/certificates/publish",
-      json("POST", { templateId }),
+      json("POST", { templateId })
     ),
   myCertificates: () => request<ApiCertificate[]>("/certificates/me"),
   verifyCertificate: (certificateId: string) =>
@@ -514,7 +517,7 @@ export const api = {
       {
         headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
         credentials: "include",
-      },
+      }
     );
     if (!response.ok) {
       const result = (await response.json().catch(() => null)) as {
@@ -524,7 +527,7 @@ export const api = {
       throw new Error(
         result?.error?.message ||
           result?.message ||
-          `Request failed (${response.status})`,
+          `Request failed (${response.status})`
       );
     }
     return response.blob();
@@ -742,10 +745,10 @@ function toEvent(event: ApiEvent): Event {
   const status = ["draft", "cancelled", "archived"].includes(event.status)
     ? (event.status as Event["status"])
     : end < new Date()
-      ? "ended"
-      : start <= new Date()
-        ? "live"
-        : "upcoming";
+    ? "ended"
+    : start <= new Date()
+    ? "live"
+    : "upcoming";
   return {
     id: event._id,
     title: event.title,

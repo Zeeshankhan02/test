@@ -54,10 +54,10 @@ const schema = z
       .default("false")
       .transform((v) => v === "true"),
     COOKIE_SAME_SITE: z.enum(["strict", "lax", "none"]).default("lax"),
-    CLOUDINARY_CLOUD_NAME: trimmedOptionalString,
-    CLOUDINARY_API_KEY: trimmedOptionalString,
-    CLOUDINARY_API_SECRET: trimmedOptionalString,
-    CLOUDINARY_EVENT_FOLDER: trimmedOptionalString,
+    CLOUDINARY_CLOUD_NAME: optionalString,
+    CLOUDINARY_API_KEY: optionalString,
+    CLOUDINARY_API_SECRET: optionalString,
+    CLOUDINARY_EVENT_FOLDER: z.string().trim().min(1).default("festiqo/events"),
   })
   .refine(
     (value) => value.JWT_ACCESS_SECRET !== value.JWT_REFRESH_SECRET,
