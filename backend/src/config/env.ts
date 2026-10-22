@@ -11,16 +11,13 @@ const optionalString = z.preprocess(
  * and copy/pasted credentials often carry trailing spaces or newlines; both
  * silently break Cloudinary signature checks with a confusing 502.
  */
-const trimmedOptionalString = z.preprocess(
-  (value) => {
-    if (typeof value !== "string") return value === "" ? undefined : value;
-    // Strip surrounding quotes first, then whitespace — copy/pasted .env values
-    // commonly arrive as ` "my-cloud" `, `\"key\"\n`, etc.
-    const cleaned = value.replace(/^\s*["'](.*)["']\s*$/s, "$1").trim();
-    return cleaned === "" ? undefined : cleaned;
-  },
-  z.string().optional(),
-);
+const trimmedOptionalString = z.preprocess((value) => {
+  if (typeof value !== "string") return value === "" ? undefined : value;
+  // Strip surrounding quotes first, then whitespace — copy/pasted .env values
+  // commonly arrive as ` "my-cloud" `, `\"key\"\n`, etc.
+  const cleaned = value.replace(/^\s*["'](.*)["']\s*$/s, "$1").trim();
+  return cleaned === "" ? undefined : cleaned;
+}, z.string().optional());
 
 const schema = z
   .object({

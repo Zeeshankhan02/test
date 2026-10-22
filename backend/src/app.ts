@@ -20,6 +20,7 @@ import { leaderboardsRoutes } from "./modules/leaderboards/leaderboards.routes.j
 import { notificationsRoutes } from "./modules/notifications/notifications.routes.js";
 import { volunteersRoutes } from "./modules/volunteers/volunteers.routes.js";
 import { certificatesRoutes } from "./modules/certificates/certificates.routes.js";
+import { festConfigRoutes } from "./modules/fest-config/fest-config.routes.js";
 import { dashboardRoutes } from "./modules/dashboard/dashboard.routes.js";
 import { auditLogsRoutes } from "./modules/audit-logs/audit-logs.routes.js";
 
@@ -44,7 +45,8 @@ api.use((req, res, next) => {
   const publicRead =
     req.method === "GET" &&
     (/^\/events(?:\/[a-f\d]{24})?$/i.test(req.path) ||
-      /^\/certificates\/verify\/[A-Z0-9-]+$/i.test(req.path));
+      /^\/certificates\/verify\/[A-Z0-9-]+$/i.test(req.path) ||
+      /^\/fest\/dates$/i.test(req.path));
   return publicRead && !req.headers.authorization
     ? next()
     : authenticate(req, res, next);
@@ -59,6 +61,7 @@ api.use(leaderboardsRoutes);
 api.use(notificationsRoutes);
 api.use(volunteersRoutes);
 api.use(certificatesRoutes);
+api.use(festConfigRoutes);
 api.use(dashboardRoutes);
 api.use(auditLogsRoutes);
 app.use("/api/v1", cookieCsrfMiddleware);

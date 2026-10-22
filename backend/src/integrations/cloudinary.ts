@@ -29,7 +29,9 @@ const eventImageFolder = () => env.CLOUDINARY_EVENT_FOLDER || "festiqo/events";
  * Uploads an event poster to Cloudinary and returns its secure URL plus the
  * public id needed to replace or delete the asset later.
  */
-export async function uploadEventImage(file: Express.Multer.File): Promise<UploadedImage> {
+export async function uploadEventImage(
+  file: Express.Multer.File,
+): Promise<UploadedImage> {
   if (!file) return fail(400, "IMAGE_REQUIRED", "Select an image file to upload");
   // Validate the file itself before touching Cloudinary so misconfigured
   // servers still give the admin actionable feedback about the upload.
@@ -87,7 +89,11 @@ export async function uploadEventImage(file: Express.Multer.File): Promise<Uploa
             logger.error(
               {
                 error: error
-                  ? { name: error.name, message: error.message, http_code: error.http_code }
+                  ? {
+                      name: error.name,
+                      message: error.message,
+                      http_code: error.http_code,
+                    }
                   : undefined,
                 result,
               },

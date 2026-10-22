@@ -13,15 +13,9 @@ const jsonBodyParser = express.json({ limit: "100kb" });
 const parseJsonBody: express.RequestHandler = (req, res, next) =>
   jsonBodyParser(req, res, (error?: unknown) => {
     if (error instanceof SyntaxError) {
-      return next(
-        Object.assign(error, { type: "entity.parse.failed", status: 400 }),
-      );
+      return next(Object.assign(error, { type: "entity.parse.failed", status: 400 }));
     }
     return next(error);
   });
 
-export const securityMiddleware = [
-  helmet(),
-  parseJsonBody,
-  cookieParser(),
-];
+export const securityMiddleware = [helmet(), parseJsonBody, cookieParser()];

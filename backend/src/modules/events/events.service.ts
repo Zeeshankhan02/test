@@ -118,13 +118,11 @@ export async function editEvent(
   if (changes.image === "") {
     updates.image = null;
     updates.imagePublicId = null;
-    replacedPublicId =
-      current.imagePublicId || publicIdFromStoredImage(current.image);
+    replacedPublicId = current.imagePublicId || publicIdFromStoredImage(current.image);
   } else if (typeof changes.image === "string") {
     // A new poster was uploaded: remember the old asset so it can be cleaned
     // up after the update succeeds (image update on published events).
-    replacedPublicId =
-      current.imagePublicId || publicIdFromStoredImage(current.image);
+    replacedPublicId = current.imagePublicId || publicIdFromStoredImage(current.image);
   }
   const event = await Event.findByIdAndUpdate(
     eventId,
