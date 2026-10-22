@@ -6,6 +6,8 @@ import type { z } from "zod";
 import {
   Certificate,
   CertificateTemplate,
+  Event,
+  FestConfig,
   Notification,
   Registration,
   User,
@@ -137,6 +139,137 @@ export async function issueCertificates(adminId: string, templateId: string) {
     { issuedCount: created },
   );
   return { published: created };
+}
+
+/**
+ * Render a real PDF for an issued, non-revoked certificate owned by the
+ * requesting student. Ownership + publication are verified on the trusted
+ * backend before any bytes are produced; revoked or foreign certificates
+ * simply 404/410 so guessing an id cannot leak another student's file.
+ */
+export async function renderCertificatePdf(userId: string, certificateDocId: string) {
+  const certificate = await Certificate.findById(certificateDocId)
+    .populate("templateId")
+    .lean();
+  if (!certificate) return fail(404, "NOT_FOUND", "Certificate not found");
+  if (String((certificate as { userId?: unknown }).userId) !== userId)
+    return fail(
+      403,
+      "CERTIFICATE_FORBIDDEN",
+      "This certificate belongs to another participant",
+    );
+  if ((certificate as { revokedAt?: Date }).revokedAt)
+    return fail(410, "CERTIFICATE_REVOKED", "This certificate has been revoked");
+  const template = certificate.templateId as unknown as {
+    title?: string;
+    description?: string;
+    status?: string;
+    signatureName?: string;
+    signatureRole?: string;
+    eventId?: string;
+  };
+  if (!template || template.status !== "published")
+    return fail(
+      403,
+      "CERTIFICATE_UNPUBLISHED",
+      "This certificate is not published yet",
+    );
+  const event = await Event.findById(template.eventId).select("title").lean();
+  const fest = await FestConfig.findOne({ key: "current" }).lean();
+  const recipient = String(
+    (certificate as { recipientName?: string }).recipientName || "",
+  );
+  const issuedAt = (certificate as { issuedAt?: Date | string }).issuedAt;
+
+  // jspdf resolves to its Node build under the node condition (tsconfig moduleResolution: node).
+  const { jsPDF } = await import("jspdf");
+  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+
+  doc.setFillColor(15, 23, 42);
+  doc.rect(0, 0, pageWidth, pageHeight, "F");
+  doc.setDrawColor(217, 119, 6);
+  doc.setLineWidth(2);
+  doc.rect(10, 10, pageWidth - 20, pageHeight - 20);
+
+  doc.setTextColor(251, 191, 36);
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(14);
+  doc.text((fest?.title || "College Fest").toUpperCase(), pageWidth / 2, 30, {
+    align: "center",
+  });
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(30);
+  doc.text("CERTIFICATE OF PARTICIPATION", pageWidth / 2, 48, { align: "center" });
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(13);
+  doc.text("This certificate is proudly presented to", pageWidth / 2, 66, {
+    align: "center",
+  });
+
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(26);
+  doc.setTextColor(217, 119, 6);
+  doc.text(recipient, pageWidth / 2, 82, { align: "center" });
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(13);
+  doc.setTextColor(226, 232, 240);
+  const eventName = (event?.title || "").trim();
+  doc.text(
+    `for participating in ${eventName ? `"${eventName}"` : "the fest quiz"} — ${template.title}`,
+    pageWidth / 2,
+    95,
+    { align: "center", maxWidth: pageWidth - 40 },
+  );
+  if (template.description)
+    doc.text(template.description, pageWidth / 2, 108, {
+      align: "center",
+      maxWidth: pageWidth - 60,
+    });
+
+  doc.setFontSize(11);
+  doc.setTextColor(148, 163, 184);
+  const issuedText = issuedAt
+    ? new Date(issuedAt).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+      })
+    : "";
+  doc.text(
+    `Issued ${issuedText}   •   ID: ${(certificate as { certificateId?: string }).certificateId}`,
+    pageWidth / 2,
+    pageHeight - 42,
+    { align: "center" },
+  );
+
+  doc.setTextColor(255, 255, 255);
+  doc.setFont("helvetica", "bold");
+  doc.text(template.signatureName || "", pageWidth / 2, pageHeight - 26, {
+    align: "center",
+  });
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(148, 163, 184);
+  doc.text(template.signatureRole || "", pageWidth / 2, pageHeight - 20, {
+    align: "center",
+  });
+
+  const filenameParts = [eventName || "certificate", recipient]
+    .join("-")
+    // Strip path separators, ASCII control characters and non-printables.
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]+/g, " ")
+    .trim()
+    .replace(/\s+/g, "-")
+    .slice(0, 120);
+  return {
+    buffer: Buffer.from(doc.output("arraybuffer")),
+    filename: `${filenameParts || "certificate"}.pdf`,
+  };
 }
 
 export async function listUserCertificates(userId: string) {

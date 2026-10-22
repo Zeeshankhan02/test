@@ -7,8 +7,18 @@ export async function listLeaderboard(
   userId: string,
   role: "student" | "admin",
 ) {
-  const quiz = await Quiz.findById(quizId).select("eventId").lean();
+  const quiz = await Quiz.findById(quizId).select("eventId resultsPublishedAt").lean();
   if (!quiz) return fail(404, "NOT_FOUND", "Quiz not found");
+  // Feature 3: the leaderboard is result data. Students cannot see it until
+  // an administrator has explicitly published this quiz's results; the
+  // check runs at the trusted data-access layer on every request, so a
+  // cached client, refresh, or direct URL cannot bypass it.
+  if (role !== "admin" && !quiz.resultsPublishedAt)
+    return fail(
+      403,
+      "RESULTS_NOT_PUBLISHED",
+      "Results have not been published for this quiz yet",
+    );
   if (role === "student")
     await requireQuizEventRegistration(
       quiz.eventId ? String(quiz.eventId) : "",

@@ -4,6 +4,7 @@ import { allow } from "../../middleware/authorize.middleware.js";
 import {
   archiveEvent,
   cancelEvent,
+  clearEventPoster,
   createEvent,
   deleteEventImageByPublicId,
   getEvent,
@@ -32,6 +33,8 @@ eventsRoutes.post(
 // Express 5 uses path-to-regexp v8, which no longer supports the `(*)` wildcard
 // syntax. `{*publicId}` captures any remaining segments (including slashes).
 eventsRoutes.delete("/images/{*publicId}", allow("admin"), deleteEventImageByPublicId);
+// Drop the poster attached to an existing event (asset + document fields).
+eventsRoutes.delete("/:eventId/image", allow("admin"), clearEventPoster);
 eventsRoutes.post("/", allow("admin"), createEvent);
 eventsRoutes.get("/:eventId", getEvent);
 eventsRoutes.patch("/:eventId", allow("admin"), updateEvent);

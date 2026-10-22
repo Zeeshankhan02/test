@@ -7,6 +7,7 @@ import {
   getTemplates,
   issueCertificates,
   listUserCertificates,
+  renderCertificatePdf,
   revokeIssuedCertificate,
   verifyIssuedCertificate,
 } from "./certificates.service.js";
@@ -46,6 +47,21 @@ export const publishCertificates = asyncRoute(async (req, res) => {
 export const getMyCertificates = asyncRoute(async (req, res) =>
   success(res, await listUserCertificates(req.principal!.id)),
 );
+
+/** Streams a real PDF. Ownership/revocation/publication checked server-side. */
+export const downloadMyCertificate = asyncRoute(async (req, res) => {
+  const file = await renderCertificatePdf(
+    req.principal!.id,
+    parseBody(objectId, req.params.certificateId),
+  );
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${file.filename.replace(/"/g, "")}"`,
+  );
+  res.setHeader("Cache-Control", "private, no-store");
+  return res.status(200).end(file.buffer);
+});
 
 export const revokeCertificate = asyncRoute(async (req, res) =>
   success(
