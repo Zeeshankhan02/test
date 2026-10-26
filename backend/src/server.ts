@@ -5,6 +5,9 @@ import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { attachSocketServer, closeSocketServer } from "./sockets/socket-server.js";
 
+
+console.error("FESTIQO_STARTUP_DIAGNOSTIC");
+
 try {
   logger.info("Starting MongoDB connection");
   await connectDatabase();
