@@ -5,7 +5,14 @@ import { env } from "./config/env.js";
 import { logger } from "./config/logger.js";
 import { attachSocketServer, closeSocketServer } from "./sockets/socket-server.js";
 
-await connectDatabase();
+try {
+  logger.info("Starting MongoDB connection");
+  await connectDatabase();
+  logger.info("MongoDB startup connection succeeded");
+} catch (error) {
+  logger.error({ err: error }, "MongoDB startup connection failed");
+  throw error;
+}
 const server = createServer(app);
 attachSocketServer(server);
 server.listen(env.PORT, () => logger.info({ port: env.PORT }, "FestiQO API listening"));
