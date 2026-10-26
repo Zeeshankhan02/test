@@ -1,8 +1,10 @@
 import type { ErrorRequestHandler } from "express";
 import { z } from "zod";
 import { MulterError } from "multer";
+import mongoose from "mongoose";
 import { logger } from "../config/logger.js";
 import { AppError } from "../common/errors/app-error.js";
+import { databaseReady } from "../config/database.js";
 
 export const errorHandlerMiddleware: ErrorRequestHandler = (
   error: unknown,
@@ -88,6 +90,55 @@ export const errorHandlerMiddleware: ErrorRequestHandler = (
       success: false,
       message: `File upload failed: ${error.message}`,
       error: { code: error.code },
+      requestId,
+    });
+  }
+  // Mongoose errors are operational database failures, not bugs in the
+  // request pipeline. Translate them into 5xx responses so they never fall
+  // through as an unhandled "MongooseError" log with a generic 500.
+  if (error instanceof mongoose.Error || error instanceof mongoose.MongooseError) {
+    const name = error?.name;
+    const isValidation = name === "ValidationError";
+    const isCast = name === "CastError";
+    const dbUp = databaseReady();
+    if (!dbUp) {
+      logger.warn(
+        {
+          requestId,
+          method: req.method,
+          path: req.path,
+          errorType: name,
+        },
+        "Database unavailable while handling request",
+      );
+      return res.status(503).json({
+        success: false,
+        message: "Service temporarily unavailable",
+        error: { code: "DATABASE_UNAVAILABLE" },
+        requestId,
+      });
+    }
+    if (isValidation || isCast) {
+      return res.status(400).json({
+        success: false,
+        message: isCast ? "Invalid identifier format" : "Invalid request data",
+        error: { code: isCast ? "INVALID_ID" : "VALIDATION_ERROR" },
+        requestId,
+      });
+    }
+    logger.error(
+      {
+        requestId,
+        method: req.method,
+        path: req.path,
+        errorType: name,
+      },
+      "Database request error",
+    );
+    return res.status(502).json({
+      success: false,
+      message: "Database request failed",
+      error: { code: "DATABASE_ERROR" },
       requestId,
     });
   }
