@@ -6,7 +6,7 @@
     "dev": "node --env-file=.env --import tsx --watch src/server.ts",
     "clean": "node scripts/clean-dist.mjs",
     "build": "npm run clean && tsc -p tsconfig.build.json",
-    "start": "node --env-file=.env dist/server.js",
+    "start": "node dist/server.js",
     "admin:create": "node --env-file=.env --import tsx scripts/create-admin.ts",
     "tickets:migrate-credentials": "node --env-file=.env --import tsx scripts/migrate-ticket-credentials.ts",
     "health-check": "node --env-file=.env --import tsx scripts/health-check.ts",
