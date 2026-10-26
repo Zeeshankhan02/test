@@ -100,8 +100,18 @@ export const errorHandlerMiddleware: ErrorRequestHandler = (
     const name = error?.name;
     const isValidation = name === "ValidationError";
     const isCast = name === "CastError";
+    // Buffering-timeout and server-selection failures are pure connectivity
+    // problems: the operation was never sent to MongoDB. Treat them as
+    // "database unavailable" (503) even when the connection briefly flaps
+    // back to "connected" (readyState 1) between the failure and this log —
+    // otherwise a transient blip gets misclassified as a 502 DATABASE_ERROR.
+    const message = typeof error.message === "string" ? error.message : "";
+    const isConnectivity =
+      name === "MongooseServerSelectionError" ||
+      name === "MongooseError" &&
+        /buffering timed out|Connection is disconnected|was force closed/i.test(message);
     const dbUp = databaseReady();
-    if (!dbUp) {
+    if (!dbUp || isConnectivity) {
       logger.warn(
         {
           requestId,
