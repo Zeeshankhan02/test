@@ -1,5 +1,5 @@
 import express from "express";
-import * as helmet from "helmet";
+import * as helmetNamespace from "helmet";
 import cookieParser from "cookie-parser";
 
 /**
@@ -10,6 +10,7 @@ import cookieParser from "cookie-parser";
  * client receive a proper 400 BAD_JSON instead.
  */
 const jsonBodyParser = express.json({ limit: "100kb" });
+const helmet = helmetNamespace.default;
 const parseJsonBody: express.RequestHandler = (req, res, next) =>
   jsonBodyParser(req, res, (error?: unknown) => {
     if (error instanceof SyntaxError) {
@@ -18,4 +19,4 @@ const parseJsonBody: express.RequestHandler = (req, res, next) =>
     return next(error);
   });
 
-export const securityMiddleware = [helmet.default(), parseJsonBody, cookieParser()];
+export const securityMiddleware = [helmet(), parseJsonBody, cookieParser()];
