@@ -13,12 +13,33 @@ import { env } from "./env.js";
  */
 const SERVER_SELECTION_TIMEOUT_MS = 5000;
 
+
 export async function connectDatabase() {
-  await mongoose.connect(env.MONGODB_URI, {
-    serverSelectionTimeoutMS: SERVER_SELECTION_TIMEOUT_MS,
-  });
-  return mongoose.connection;
+  try {
+    await mongoose.connect(env.MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
+    });
+
+    console.info("MongoDB connection established", {
+      database: mongoose.connection.name,
+      readyState: mongoose.connection.readyState,
+    });
+
+    return mongoose.connection;
+  } catch (error) {
+    console.error("MongoDB connection failed", {
+      name: error instanceof Error ? error.name : "UnknownError",
+      message: error instanceof Error ? error.message : String(error),
+      cause:
+        error instanceof Error && error.cause instanceof Error
+          ? error.cause.message
+          : undefined,
+    });
+
+    throw error;
+  }
 }
+
 
 export async function disconnectDatabase() {
   await mongoose.disconnect();
