@@ -1,18 +1,20 @@
 import mongoose from "mongoose";
 import { env } from "./env.js";
 
-/**
- * Fail fast when MongoDB is unreachable instead of hanging for the driver's
- * default 30s server-selection window. Without this, `await connect()` in
- * server.ts blocks startup for ~30s while mongoose's 10s operation-buffering
- * timeout has already started rejecting incoming queries with MongooseError
- * ("buffering timed out"), so every request (e.g. GET /fest/dates) spends up
- * to 40s in a half-dead state before anything surfaces. A short selection
- * timeout makes connection failures deterministic and quick; the driver keeps
- * its normal background reconnect behavior afterwards.
- */
-const SERVER_SELECTION_TIMEOUT_MS = 5000;
+mongoose.connection.on("connected", () => {
+  console.info("MongoDB connected");
+});
 
+mongoose.connection.on("disconnected", () => {
+  console.error("MongoDB disconnected");
+});
+
+mongoose.connection.on("error", (error) => {
+  console.error("MongoDB connection error", {
+    name: error.name,
+    message: error.message,
+  });
+});
 
 export async function connectDatabase() {
   try {
@@ -20,29 +22,25 @@ export async function connectDatabase() {
       serverSelectionTimeoutMS: 5000,
     });
 
-    console.info("MongoDB connection established", {
-      database: mongoose.connection.name,
+    console.info("MongoDB initialization successful", {
       readyState: mongoose.connection.readyState,
+      database: mongoose.connection.name,
     });
 
     return mongoose.connection;
   } catch (error) {
-    console.error("MongoDB connection failed", {
+    console.error("MongoDB initialization failed", {
       name: error instanceof Error ? error.name : "UnknownError",
       message: error instanceof Error ? error.message : String(error),
-      cause:
-        error instanceof Error && error.cause instanceof Error
-          ? error.cause.message
-          : undefined,
     });
 
     throw error;
   }
 }
 
-
 export async function disconnectDatabase() {
   await mongoose.disconnect();
 }
 
-export const databaseReady = () => mongoose.connection.readyState === 1;
+export const databaseReady = () =>
+  mongoose.connection.readyState === 1;
