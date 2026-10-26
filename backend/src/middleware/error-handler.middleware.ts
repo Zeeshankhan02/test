@@ -1,8 +1,10 @@
 import type { ErrorRequestHandler } from "express";
 import { z } from "zod";
 import { MulterError } from "multer";
+import mongoose from "mongoose";
 import { logger } from "../config/logger.js";
 import { AppError } from "../common/errors/app-error.js";
+import { databaseReady } from "../config/database.js";
 
 export const errorHandlerMiddleware: ErrorRequestHandler = (
   error: unknown,
@@ -88,6 +90,68 @@ export const errorHandlerMiddleware: ErrorRequestHandler = (
       success: false,
       message: `File upload failed: ${error.message}`,
       error: { code: error.code },
+      requestId,
+    });
+  }
+  // Mongoose errors are operational database failures, not bugs in the
+  // request pipeline. Translate them into 5xx responses so they never fall
+  // through as an unhandled "MongooseError" log with a generic 500.
+  if (error instanceof mongoose.Error || error instanceof mongoose.MongooseError) {
+    const name = error?.name;
+    const isValidation = name === "ValidationError";
+    const isCast = name === "CastError";
+    // Buffering-timeout and server-selection failures are pure connectivity
+    // problems: the operation was never sent to MongoDB. Treat them as
+    // "database unavailable" (503) even when the connection briefly flaps
+    // back to "connected" (readyState 1) between the failure and this log —
+    // otherwise a transient blip gets misclassified as a 502 DATABASE_ERROR.
+    const message = typeof error.message === "string" ? error.message : "";
+    const isConnectivity =
+      name === "MongooseServerSelectionError" ||
+      name === "MongooseError" &&
+        /buffering timed out|Connection is disconnected|was force closed/i.test(message);
+    const dbUp = databaseReady();
+    if (!dbUp || isConnectivity) {
+     logger.warn(
+  {
+    requestId,
+    method: req.method,
+    path: req.path,
+    errorType: name,
+    errorMessage: error.message,
+    readyState: mongoose.connection.readyState,
+    database: mongoose.connection.name,
+  },
+  "Database unavailable while handling request",
+);
+      return res.status(503).json({
+        success: false,
+        message: "Service temporarily unavailable",
+        error: { code: "DATABASE_UNAVAILABLE" },
+        requestId,
+      });
+    }
+    if (isValidation || isCast) {
+      return res.status(400).json({
+        success: false,
+        message: isCast ? "Invalid identifier format" : "Invalid request data",
+        error: { code: isCast ? "INVALID_ID" : "VALIDATION_ERROR" },
+        requestId,
+      });
+    }
+    logger.error(
+      {
+        requestId,
+        method: req.method,
+        path: req.path,
+        errorType: name,
+      },
+      "Database request error",
+    );
+    return res.status(502).json({
+      success: false,
+      message: "Database request failed",
+      error: { code: "DATABASE_ERROR" },
       requestId,
     });
   }
