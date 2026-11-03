@@ -108,22 +108,24 @@ export const errorHandlerMiddleware: ErrorRequestHandler = (
     const message = typeof error.message === "string" ? error.message : "";
     const isConnectivity =
       name === "MongooseServerSelectionError" ||
-      name === "MongooseError" &&
-        /buffering timed out|Connection is disconnected|was force closed/i.test(message);
+      (name === "MongooseError" &&
+        /buffering timed out|Connection is disconnected|was force closed|no connection found/i.test(
+          message,
+        ));
     const dbUp = databaseReady();
     if (!dbUp || isConnectivity) {
-     logger.warn(
-  {
-    requestId,
-    method: req.method,
-    path: req.path,
-    errorType: name,
-    errorMessage: error.message,
-    readyState: mongoose.connection.readyState,
-    database: mongoose.connection.name,
-  },
-  "Database unavailable while handling request",
-);
+      logger.warn(
+        {
+          requestId,
+          method: req.method,
+          path: req.path,
+          errorType: name,
+          errorMessage: error.message,
+          readyState: mongoose.connection.readyState,
+          database: mongoose.connection.name,
+        },
+        "Database unavailable while handling request",
+      );
       return res.status(503).json({
         success: false,
         message: "Service temporarily unavailable",
