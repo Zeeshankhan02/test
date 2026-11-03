@@ -8,6 +8,7 @@ import { authenticate } from "./middleware/authenticate.middleware.js";
 import { notFoundMiddleware } from "./middleware/not-found.middleware.js";
 import { errorHandlerMiddleware } from "./middleware/error-handler.middleware.js";
 import { cookieCsrfMiddleware } from "./middleware/cookie-csrf.middleware.js";
+import { requireDatabaseMiddleware } from "./middleware/require-database.middleware.js";
 import { publicAuthRoutes } from "./modules/auth/auth.routes.js";
 import { usersRoutes } from "./modules/users/users.routes.js";
 import { eventsRoutes } from "./modules/events/events.routes.js";
@@ -39,6 +40,11 @@ app.get("/health/ready", (_req, res) => {
 });
 
 const api = express.Router();
+// Every route below touches MongoDB. Reject cold-start requests immediately
+// (503 DATABASE_UNAVAILABLE) instead of letting Mongoose buffer them for 10s
+// and fail with "buffering timed out". /health/live and /health/ready stay
+// reachable without a database so platforms can probe readiness correctly.
+api.use(requireDatabaseMiddleware);
 api.use("/auth", publicAuthRoutes);
 api.use("/auth", usersRoutes);
 api.use((req, res, next) => {
