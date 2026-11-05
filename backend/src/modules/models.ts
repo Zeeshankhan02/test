@@ -38,6 +38,12 @@ const eventSchema = new Schema(
     registeredCount: { type: Number, default: 0, min: 0 },
     teamMin: { type: Number, default: 1, min: 1 },
     teamMax: { type: Number, default: 1, min: 1 },
+    participationType: {
+      type: String,
+      enum: ["individual", "team", "both"],
+      default: "individual",
+    },
+    teamLeaderIncluded: { type: Boolean, default: true },
     status: {
       type: String,
       enum: ["draft", "published", "cancelled", "archived"],
@@ -57,11 +63,16 @@ const registrationSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     teamName: { type: String, trim: true, maxlength: 100 },
     members: [{ type: String, trim: true, maxlength: 100 }],
+    memberIds: [{ type: Schema.Types.ObjectId, ref: "User" }],
     status: { type: String, enum: ["confirmed", "cancelled"], default: "confirmed" },
   },
   { timestamps: true },
 );
 registrationSchema.index({ eventId: 1, userId: 1 }, { unique: true });
+registrationSchema.index(
+  { eventId: 1, memberIds: 1 },
+  { unique: true, partialFilterExpression: { memberIds: { $exists: true } } },
+);
 
 const ticketSchema = new Schema(
   {
@@ -124,6 +135,16 @@ const quizSchema = new Schema(
     terminatedBy: { type: Schema.Types.ObjectId, ref: "User" },
     resultsPublishedAt: { type: Date },
     resultsAnnouncedAt: { type: Date },
+    qualificationCandidates: { type: [Schema.Types.Mixed], default: [] },
+    qualifiedParticipants: { type: [Schema.Types.Mixed], default: [] },
+    qualificationPublishedAt: Date,
+    round2Rankings: { type: [Schema.Types.Mixed], default: [] },
+    round2PublishedAt: Date,
+    round3AdvancementLimit: { type: Number, default: 3, min: 1, max: 10 },
+    round3Rankings: { type: [Schema.Types.Mixed], default: [] },
+    round3PublishedAt: Date,
+    winnerUserId: { type: Schema.Types.ObjectId, ref: "User" },
+    winnerConfirmedAt: Date,
     questions: [
       {
         text: { type: String, required: true },
@@ -213,12 +234,15 @@ const certificateSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     recipientName: { type: String, required: true, maxlength: 140 },
     certificateId: { type: String, required: true, unique: true },
+    awardType: { type: String, enum: ["participation", "winner"], default: "participation" },
+    competitionId: { type: Schema.Types.ObjectId, ref: "Quiz" },
     issuedAt: { type: Date, default: Date.now },
     revokedAt: Date,
   },
   { timestamps: true },
 );
 certificateSchema.index({ templateId: 1, registrationId: 1 }, { unique: true });
+certificateSchema.index({ competitionId: 1 }, { unique: true, sparse: true });
 
 const auditLogSchema = new Schema(
   {

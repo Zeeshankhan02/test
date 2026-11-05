@@ -19,6 +19,10 @@ export type Event = {
   registered: number;
   image: string;
   imagePublicId?: string;
+  participationType?: "individual" | "team" | "both";
+  teamMin?: number;
+  teamMax?: number;
+  teamLeaderIncluded?: boolean;
 };
 export type Registration = {
   id: string;

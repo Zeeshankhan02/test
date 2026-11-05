@@ -79,6 +79,10 @@ type ApiEvent = {
   image?: string;
   imagePublicId?: string;
   registrationDeadline?: string;
+  participationType?: "individual" | "team" | "both";
+  teamMin?: number;
+  teamMax?: number;
+  teamLeaderIncluded?: boolean;
 };
 type Envelope<T> = { success: true; data: T };
 
@@ -252,13 +256,13 @@ export const api = {
     toEvent(await request<ApiEvent>(`/events/${id}/cancel`, json("POST"))),
   archiveEvent: async (id: string) =>
     toEvent(await request<ApiEvent>(`/events/${id}/archive`, json("POST"))),
-  register: (eventId: string, members: string[], teamName?: string) =>
+  register: (eventId: string, participationType: "individual" | "team", teamName?: string, memberEmails?: string[]) =>
     request<{
       registration: Record<string, unknown>;
       ticket: { credential: string };
     }>(
       `/events/${eventId}/register`,
-      json("POST", { members, ...(teamName ? { teamName } : {}) })
+      json("POST", { participationType, ...(teamName ? { teamName } : {}), ...(memberEmails ? { memberEmails } : {}) })
     ),
   registrations: () => request<ApiRegistration[]>("/registrations/me"),
   eventRegistrations: (eventId: string) =>
@@ -438,6 +442,18 @@ export const api = {
       `/quizzes/${id}/results/announce`,
       json("POST")
     ),
+  competition: (id: string) => request<ApiCompetition>(`/quizzes/${id}/competition`),
+  competitionProgress: (id: string) => request<ApiCompetitionProgress>(`/quizzes/${id}/competition`),
+  prepareQualification: (id: string) => request<ApiCompetitionRow[]>(`/quizzes/${id}/competition/qualification/prepare`, json("POST")),
+  publishQualification: (id: string, userIds: string[], reason?: string) => request<ApiCompetitionRow[]>(`/quizzes/${id}/competition/qualification/publish`, json("POST", { userIds, ...(reason ? { reason } : {}) })),
+  correctQualification: (id: string, userIds: string[], reason: string) => request<ApiCompetitionRow[]>(`/quizzes/${id}/competition/qualification/correct`, json("POST", { userIds, reason })),
+  saveRound2: (id: string, rankings: ApiCompetitionRank[], advancementLimit: number) => request<ApiCompetitionRank[]>(`/quizzes/${id}/competition/round-2`, json("PUT", { rankings, advancementLimit })),
+  publishRound2: (id: string) => request<unknown>(`/quizzes/${id}/competition/round-2/publish`, json("POST")),
+  correctRound2: (id: string, rankings: ApiCompetitionRank[], reason: string) => request<ApiCompetitionRank[]>(`/quizzes/${id}/competition/round-2/correct`, json("POST", { rankings, reason })),
+  saveRound3: (id: string, rankings: ApiCompetitionRank[]) => request<ApiCompetitionRank[]>(`/quizzes/${id}/competition/round-3`, json("PUT", { rankings })),
+  publishRound3: (id: string) => request<unknown>(`/quizzes/${id}/competition/round-3/publish`, json("POST")),
+  correctRound3: (id: string, rankings: ApiCompetitionRank[], reason: string) => request<ApiCompetitionRank[]>(`/quizzes/${id}/competition/round-3/correct`, json("POST", { rankings, reason })),
+  confirmCompetitionWinner: (id: string) => request<{ userId: string; confirmedAt: string }>(`/quizzes/${id}/competition/winner/confirm`, json("POST")),
   endQuizEarly: (id: string) =>
     request<unknown>(`/quizzes/${id}/end-early`, json("POST")),
   retryQuizFinalization: (id: string) =>
@@ -503,6 +519,7 @@ export const api = {
       "/certificates/publish",
       json("POST", { templateId })
     ),
+  publishWinnerCertificate: (quizId: string, templateId: string) => request<{ _id: string; certificateId: string; userId: string }>(`/certificates/competitions/${quizId}/winner`, json("POST", { templateId })),
   myCertificates: () => request<ApiCertificate[]>("/certificates/me"),
   verifyCertificate: (certificateId: string) =>
     request<{
@@ -544,6 +561,8 @@ export type EventDraft = {
   capacity: number;
   teamMin: number;
   teamMax: number;
+  participationType: "individual" | "team" | "both";
+  teamLeaderIncluded: boolean;
   image?: string;
   imagePublicId?: string;
 };
@@ -573,6 +592,7 @@ export type FestDatesDraft = {
 };
 export type ApiAdminQuiz = {
   id: string;
+  eventId: string;
   title: string;
   eventTitle: string;
   status: "draft" | "published" | "closed";
@@ -614,6 +634,35 @@ export type ApiQuizResult = {
   completedAt: string;
   timeTakenSeconds: number | null;
   resultsPublishedAt: string;
+};
+export type ApiCompetitionRow = { userId: string; rank: number; score: number; submittedAt?: string; participant: { name: string; email: string } | null };
+export type ApiCompetitionRank = { userId: string; rank: number; score?: number; notes?: string; participant?: { name: string; email: string } | null };
+export type ApiCompetition = {
+  title: string;
+  qualificationCandidates: ApiCompetitionRow[];
+  qualifiedParticipants: ApiCompetitionRow[];
+  qualificationPublishedAt?: string | null;
+  round2Rankings: ApiCompetitionRank[];
+  round2PublishedAt?: string | null;
+  round3AdvancementLimit: number;
+  round3Rankings: ApiCompetitionRank[];
+  round3PublishedAt?: string | null;
+  winnerUserId?: string | null;
+  winnerConfirmedAt?: string | null;
+  winnerCertificate?: { id: string; userId?: string; certificateId: string } | null;
+};
+export type ApiCompetitionProgress = {
+  title: string;
+  round1Started: boolean;
+  round1Submitted: boolean;
+  round1Published: boolean;
+  round1Score: number | null;
+  round1Rank: number | null;
+  qualified: boolean | null;
+  round2: ApiCompetitionRank | null;
+  round3: ApiCompetitionRank | null;
+  isWinner: boolean;
+  winnerCertificate: { id: string; certificateId: string } | null;
 };
 export type ApiAttemptSnapshot = {
   attemptId: string;
@@ -762,6 +811,10 @@ function toEvent(event: ApiEvent): Event {
     registered: event.registeredCount,
     image: event.image || "",
     imagePublicId: event.imagePublicId || "",
+    participationType: event.participationType || "individual",
+    teamMin: event.teamMin ?? 1,
+    teamMax: event.teamMax ?? 1,
+    teamLeaderIncluded: event.teamLeaderIncluded ?? true,
   };
 }
 

@@ -11,6 +11,7 @@ import {
   Notification,
   Registration,
   User,
+  Quiz,
 } from "../models.js";
 import type {
   certificateTemplateInput,
@@ -141,6 +142,58 @@ export async function issueCertificates(adminId: string, templateId: string) {
   return { published: created };
 }
 
+export async function issueWinnerCertificate(adminId: string, quizId: string, sourceTemplateId: string) {
+  const quiz = await Quiz.findById(quizId).lean();
+  if (!quiz?.winnerConfirmedAt || !quiz.winnerUserId || !quiz.round3PublishedAt)
+    return fail(409, "WINNER_NOT_CONFIRMED", "Confirm the final-round winner before issuing a certificate");
+  if (await Certificate.exists({ competitionId: quizId }))
+    return fail(409, "WINNER_CERTIFICATE_EXISTS", "A winner certificate has already been issued");
+  const source = await CertificateTemplate.findById(sourceTemplateId).lean();
+  if (!source || String(source.eventId) !== String(quiz.eventId))
+    return fail(400, "TEMPLATE_EVENT_MISMATCH", "Choose a certificate template for this quiz event");
+  const registration = await Registration.findOne({
+    eventId: quiz.eventId,
+    userId: quiz.winnerUserId,
+    status: "confirmed",
+    $or: [{ teamName: { $exists: false } }, { teamName: "" }],
+  }).lean();
+  const user = await User.findById(quiz.winnerUserId).select("name").lean();
+  if (!registration || !user)
+    return fail(409, "WINNER_REGISTRATION_MISSING", "The winner needs an active individual event registration");
+  const session = await Certificate.startSession();
+  const result: { issued?: { _id: string; certificateId: string; userId: string } } = {};
+  try {
+    await session.withTransaction(async () => {
+      if (await Certificate.exists({ competitionId: quizId }).session(session))
+        return fail(409, "WINNER_CERTIFICATE_EXISTS", "A winner certificate has already been issued");
+      const [template] = await CertificateTemplate.create([{
+        title: `Winner Certificate · ${source.title}`,
+        description: source.description,
+        eventId: source.eventId,
+        signatureName: source.signatureName,
+        signatureRole: source.signatureRole,
+        status: "published",
+      }], { session });
+      const certificateId = `FQ-${randomBytes(9).toString("hex").toUpperCase()}`;
+      const [certificate] = await Certificate.create([{
+        templateId: template!._id,
+        registrationId: registration._id,
+        userId: quiz.winnerUserId,
+        recipientName: user.name,
+        certificateId,
+        awardType: "winner",
+        competitionId: quiz._id,
+      }], { session });
+      result.issued = { certificateId: certificate!.certificateId, _id: String(certificate!._id), userId: String(quiz.winnerUserId) };
+    });
+  } finally {
+    await session.endSession();
+  }
+  if (!result.issued) return fail(409, "CERTIFICATE_ISSUE_FAILED", "Winner certificate could not be issued");
+  await recordAudit(adminId, "winner_certificate.published", "quiz", quizId, { certificateId: result.issued.certificateId, userId: result.issued.userId });
+  return result.issued;
+}
+
 /**
  * Render a real PDF for an issued, non-revoked certificate owned by the
  * requesting student. Ownership + publication are verified on the trusted
@@ -202,7 +255,8 @@ export async function renderCertificatePdf(userId: string, certificateDocId: str
 
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(30);
-  doc.text("CERTIFICATE OF PARTICIPATION", pageWidth / 2, 48, { align: "center" });
+  const awardType = (certificate as { awardType?: string }).awardType || "participation";
+  doc.text(awardType === "winner" ? "CERTIFICATE OF ACHIEVEMENT" : "CERTIFICATE OF PARTICIPATION", pageWidth / 2, 48, { align: "center" });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(13);
@@ -220,7 +274,9 @@ export async function renderCertificatePdf(userId: string, certificateDocId: str
   doc.setTextColor(226, 232, 240);
   const eventName = (event?.title || "").trim();
   doc.text(
-    `for participating in ${eventName ? `"${eventName}"` : "the fest quiz"} — ${template.title}`,
+    awardType === "winner"
+      ? `for winning ${eventName ? `"${eventName}"` : "the fest quiz"} — ${template.title}`
+      : `for participating in ${eventName ? `"${eventName}"` : "the fest quiz"} — ${template.title}`,
     pageWidth / 2,
     95,
     { align: "center", maxWidth: pageWidth - 40 },

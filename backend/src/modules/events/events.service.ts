@@ -94,7 +94,7 @@ export async function editEvent(
   changes: z.input<typeof eventUpdateInput>,
 ) {
   const current = await Event.findById(eventId).select(
-    "registeredCount startsAt endsAt teamMin teamMax image imagePublicId",
+    "registeredCount startsAt endsAt teamMin teamMax participationType teamLeaderIncluded image imagePublicId",
   );
   if (!current) return fail(404, "NOT_FOUND", "Event not found");
   if (changes.capacity !== undefined && changes.capacity < current.registeredCount)
@@ -109,8 +109,22 @@ export async function editEvent(
   const endsAt = changes.endsAt ? Date.parse(changes.endsAt) : current.endsAt.getTime();
   const teamMin = changes.teamMin ?? current.teamMin;
   const teamMax = changes.teamMax ?? current.teamMax;
-  if (endsAt <= startsAt || teamMax < teamMin)
+  const participationType = changes.participationType ?? current.participationType ?? "individual";
+  if (endsAt <= startsAt || teamMax < teamMin || (participationType !== "individual" && teamMin < 2))
     return fail(400, "VALIDATION_ERROR", "Invalid event dates or team size");
+  if (changes.teamMin !== undefined || changes.teamMax !== undefined || changes.participationType !== undefined || changes.teamLeaderIncluded !== undefined) {
+    const existing = await Registration.find({ eventId, status: "confirmed" }).select("members memberIds teamName").lean();
+    const teams = existing.filter((registration) => Boolean(registration.teamName));
+    if (participationType === "team" && existing.some((registration) => !registration.teamName))
+      return fail(409, "EXISTING_SOLO_CONFLICT", "Participation settings cannot invalidate existing solo registrations");
+    if (participationType === "individual" && teams.length)
+      return fail(409, "EXISTING_TEAMS_CONFLICT", "Participation settings cannot invalidate existing team registrations");
+    if ((changes.teamLeaderIncluded !== undefined && changes.teamLeaderIncluded !== (current.teamLeaderIncluded ?? true) && teams.length > 0) || teams.some((registration) => {
+      const size = (registration.memberIds?.length || registration.members.length) - Number(!(changes.teamLeaderIncluded ?? current.teamLeaderIncluded));
+      return participationType === "individual" || size < teamMin || size > teamMax;
+    }))
+      return fail(409, "EXISTING_TEAMS_CONFLICT", "Participation settings cannot invalidate existing team registrations");
+  }
   // An empty image string means the admin removed the poster: clear both the
   // stored URL and the Cloudinary public id reference.
   const updates: Record<string, unknown> = { ...changes };
@@ -173,7 +187,7 @@ export async function cancelEvent(adminId: string, eventId: string) {
       }).session(session);
       if (!current) return fail(404, "NOT_FOUND", "Event not found or already closed");
       const registrations = await Registration.find({ eventId, status: "confirmed" })
-        .select("_id userId members")
+        .select("_id userId members teamName")
         .session(session)
         .lean();
       if (registrations.length > 25_000)

@@ -48,7 +48,7 @@ function withCredential(row: TicketCredentialRecord) {
 export async function listTicketsForUser(userId: string) {
   // Only confirmed registrations should have active participant tickets.
   const registrations = await Registration.find({
-    userId,
+    $or: [{ userId }, { memberIds: userId }],
     status: "confirmed",
   })
     .select("_id")
@@ -137,9 +137,9 @@ export async function getTicket(ticketId: string, userId: string, isAdmin: boole
   if (!ticket) return fail(404, "NOT_FOUND", "Ticket not found");
   if (!isAdmin) {
     const registration = await Registration.findById(ticket.registrationId)
-      .select("userId")
+      .select("userId memberIds")
       .lean();
-    if (String(registration?.userId) !== userId)
+    if (String(registration?.userId) !== userId && !registration?.memberIds?.some((id) => String(id) === userId))
       fail(404, "NOT_FOUND", "Ticket not found");
   }
   return withCredential(ticket.toObject() as TicketCredentialRecord);

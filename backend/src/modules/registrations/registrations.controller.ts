@@ -25,7 +25,7 @@ export const registerForEvent = asyncRoute(async (req, res) => {
   const input = parseBody(registrationInput, req.body);
   const result = await registerParticipant(
     parseBody(objectId, req.params.eventId),
-    { id: req.principal!.id, name: req.principal!.name },
+    { id: req.principal!.id, name: req.principal!.name, email: req.principal!.email },
     input,
   );
   return success(res, result, 201);

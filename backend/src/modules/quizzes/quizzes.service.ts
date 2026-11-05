@@ -20,9 +20,17 @@ function validateAnswerKeys(data: QuizInput) {
 }
 
 export async function requireQuizEventRegistration(eventId: string, userId: string) {
+  const event = eventId ? await Event.findById(eventId).select("participationType").lean() : null;
+  if (event?.participationType === "team")
+    return fail(403, "TEAM_QUIZ_UNSUPPORTED", "Quiz attempts are individual; team quiz participation is not configured");
   if (
     !eventId ||
-    !(await Registration.exists({ eventId, userId, status: "confirmed" }))
+    !(await Registration.exists({
+      eventId,
+      userId,
+      status: "confirmed",
+      ...(event?.participationType === "both" ? { $or: [{ teamName: { $exists: false } }, { teamName: "" }] } : {}),
+    }))
   )
     return fail(
       403,
@@ -35,16 +43,23 @@ export async function getPublishedQuizzes(userId: string, role: "student" | "adm
   const eventIds =
     role === "admin"
       ? undefined
-      : await Registration.distinct("eventId", { userId, status: "confirmed" });
+      : await Registration.distinct("eventId", {
+          userId,
+          status: "confirmed",
+          $or: [{ teamName: { $exists: false } }, { teamName: "" }],
+        });
+  const eligibleEventIds = role === "admin" ? undefined : await Event.distinct("_id", {
+    _id: { $in: eventIds },
+    participationType: { $ne: "team" },
+  });
   return (
     await Quiz.find({
-      status: "published",
-      ...(eventIds ? { eventId: { $in: eventIds } } : {}),
+      status: { $in: ["published", "closed"] },
+      ...(eligibleEventIds ? { eventId: { $in: eligibleEventIds } } : {}),
     }).lean()
   ).map((quiz) => ({
     ...quiz,
-    // Students need to know whether the window is still open and whether
-    // results are published; correctAnswer stays stripped above.
+    // Keep closed quizzes visible so participants can track published progress.
     endsAt: quiz.endsAt ?? null,
     resultsPublishedAt: quiz.resultsPublishedAt ?? null,
     questions: quiz.questions.map(({ text, options }, index) => ({
@@ -56,8 +71,11 @@ export async function getPublishedQuizzes(userId: string, role: "student" | "adm
 }
 
 export async function addQuiz(adminId: string, input: QuizInput) {
-  if (!(await Event.exists({ _id: input.eventId })))
+  const event = await Event.findById(input.eventId).select("participationType").lean();
+  if (!event)
     return fail(404, "EVENT_NOT_FOUND", "Quiz event not found");
+  if (event.participationType === "team")
+    return fail(409, "TEAM_QUIZ_UNSUPPORTED", "Online quizzes currently require individual participant competition");
   const quiz = await Quiz.create(validateAnswerKeys(input));
   await recordAudit(adminId, "quiz.created", "quiz", String(quiz._id), {
     status: quiz.status,
@@ -82,8 +100,11 @@ export async function editQuiz(
     validateAnswerKeys({ ...quiz.toObject(), ...input } as QuizInput);
   }
   if (input.eventId) {
-    if (!(await Event.exists({ _id: input.eventId })))
+    const event = await Event.findById(input.eventId).select("participationType").lean();
+    if (!event)
       return fail(404, "EVENT_NOT_FOUND", "Quiz event not found");
+    if (event.participationType === "team")
+      return fail(409, "TEAM_QUIZ_UNSUPPORTED", "Online quizzes currently require individual participant competition");
     if (await QuizAttempt.exists({ quizId: id }))
       return fail(
         409,
@@ -179,6 +200,7 @@ export async function listQuizzesForAdmin(adminId: string) {
       ]);
       return {
         id: String(quiz._id),
+        eventId: String(((quiz.eventId as unknown as { _id?: unknown })?._id) ?? quiz.eventId),
         title: quiz.title,
         eventTitle: (quiz.eventId as unknown as { title?: string })?.title || "",
         status: quiz.status,
@@ -357,7 +379,10 @@ export async function getMyQuizResult(userId: string, quizId: string) {
   const ranked = await QuizAttempt.countDocuments({
     quizId,
     submittedAt: { $exists: true },
-    score: { $gt: attempt.score ?? 0 },
+    $or: [
+      { score: { $gt: attempt.score ?? 0 } },
+      { score: attempt.score ?? 0, submittedAt: { $lt: attempt.submittedAt } },
+    ],
   });
   return {
     quizId,

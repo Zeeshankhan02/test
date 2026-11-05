@@ -6,6 +6,7 @@ import {
   editTemplate,
   getTemplates,
   issueCertificates,
+  issueWinnerCertificate,
   listUserCertificates,
   renderCertificatePdf,
   revokeIssuedCertificate,
@@ -42,6 +43,11 @@ export const updateCertificateTemplate = asyncRoute(async (req, res) => {
 export const publishCertificates = asyncRoute(async (req, res) => {
   const { templateId } = parseBody(publishCertificateInput, req.body);
   return success(res, await issueCertificates(req.principal!.id, templateId));
+});
+
+export const publishWinnerCertificate = asyncRoute(async (req, res) => {
+  const { templateId } = parseBody(publishCertificateInput, req.body);
+  return success(res, await issueWinnerCertificate(req.principal!.id, parseBody(objectId, req.params.quizId), templateId), 201);
 });
 
 export const getMyCertificates = asyncRoute(async (req, res) =>

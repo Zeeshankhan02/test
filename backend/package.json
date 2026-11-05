@@ -9,6 +9,7 @@
     "start": "node dist/server.js",
     "admin:create": "node --env-file=.env --import tsx scripts/create-admin.ts",
     "tickets:migrate-credentials": "node --env-file=.env --import tsx scripts/migrate-ticket-credentials.ts",
+    "db:indexes:team-competition": "node --env-file=.env --import tsx scripts/create-team-competition-indexes.ts",
     "health-check": "node --env-file=.env --import tsx scripts/health-check.ts",
     "test:e2e": "npm run build && node tests/e2e/workflows.test.mjs",
     "test:browser": "npm run build && node tests/e2e/frontend-workflow.test.mjs",

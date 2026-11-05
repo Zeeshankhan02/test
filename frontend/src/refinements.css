@@ -1177,3 +1177,51 @@ html[data-theme="dark"] .auth-field, html[data-theme="dark"] .form-note, html[da
   padding: 5px 10px; font-size: 12px; backdrop-filter: blur(4px);
   background: rgba(255, 255, 255, .85); color: #14181f; border: none; border-radius: 8px; cursor: pointer;
 }
+.modal:has(.event-image-box) {
+  width: min(560px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: #b9bac4 transparent;
+}
+.modal:has(.event-image-box) label,
+.register-card label { display: block; margin: 14px 0; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.modal:has(.event-image-box) label input,
+.modal:has(.event-image-box) label select,
+.modal:has(.event-image-box) label textarea,
+.register-card label input,
+.register-card label select,
+.register-card label textarea {
+  box-sizing: border-box; display: block; width: 100%; min-width: 0; min-height: 42px;
+  margin-top: 7px; padding: 10px 12px; border: 1px solid #e3e4e9; border-radius: 9px;
+  background: #fff; color: var(--text-primary); font: inherit; font-weight: 400;
+}
+.modal:has(.event-image-box) label textarea,
+.register-card label textarea { min-height: 92px; resize: vertical; }
+.register-card label textarea { line-height: 1.5; }
+.modal:has(.event-image-box) .checkbox-label { display: flex; align-items: center; gap: 9px; }
+html[data-theme="dark"] .modal:has(.event-image-box) label input,
+html[data-theme="dark"] .modal:has(.event-image-box) label select,
+html[data-theme="dark"] .modal:has(.event-image-box) label textarea,
+html[data-theme="dark"] .register-card label input,
+html[data-theme="dark"] .register-card label select,
+html[data-theme="dark"] .register-card label textarea { border-color: #394351; background: #202833; color: #e9edf4; }
+@supports selector(::-webkit-scrollbar) {
+  .modal:has(.event-image-box)::-webkit-scrollbar { width: 6px; }
+  .modal:has(.event-image-box)::-webkit-scrollbar-thumb { border-radius: 8px; background: #b9bac4; }
+}
+.competition-progress { padding: 20px; margin-bottom: 16px; }
+.competition-choice { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid #eeeef1; color: var(--text-secondary); font-size: 12px; }
+.competition-choice input, .checkbox-label input { flex: 0 0 auto; width: 16px; height: 16px; margin: 0; accent-color: #7456ec; }
+.competition-rank-entry { display: grid; grid-template-columns: minmax(180px, 1.5fr) 72px 90px minmax(140px, 1fr) auto; align-items: center; gap: 8px; margin: 10px 0; }
+.competition-rank-entry > select, .competition-rank-entry > input, .modal:has(.competition-rank-entry) label > textarea, .modal:has(.competition-choice) label > textarea, .modal:has(.competition-rank-entry) label > select { box-sizing: border-box; width: 100%; min-width: 0; min-height: 40px; padding: 9px 11px; border: 1px solid #e3e4e9; border-radius: 8px; color: var(--text-primary); background: #fff; font-size: 12px; }
+.modal:has(.competition-choice) { width: min(900px, 100%); max-height: min(90vh, 800px); overflow: auto; }
+.modal:has(.competition-choice) label { font-size: 12px; }
+label.checkbox-label { display: flex; align-items: center; gap: 9px; }
+html[data-theme="dark"] .competition-choice { border-color: #303743; color: #c1c7d0; }
+html[data-theme="dark"] .competition-rank-entry > select, html[data-theme="dark"] .competition-rank-entry > input, html[data-theme="dark"] .modal:has(.competition-choice) label > textarea, html[data-theme="dark"] .modal:has(.competition-choice) label > select { border-color: #394351; background: #202833; color: #e9edf4; }
+@media (max-width: 600px) {
+  .competition-progress { padding: 16px; }
+  .competition-rank-entry { grid-template-columns: minmax(0, 1fr) 72px; }
+  .competition-rank-entry > select, .competition-rank-entry > input:nth-of-type(n + 2), .competition-rank-entry > button { grid-column: 1 / -1; }
+}

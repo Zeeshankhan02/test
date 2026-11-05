@@ -10,7 +10,7 @@ import {
   encryptCredentialId,
   makeCredential,
 } from "../tickets/ticket-credential.js";
-import { Event, Notification, Registration, Ticket } from "../models.js";
+import { Event, Notification, Registration, Ticket, User } from "../models.js";
 import type { registrationInput } from "./registrations.validator.js";
 import type { z } from "zod";
 
@@ -103,15 +103,12 @@ async function ensureTicketForRegistration(
 
 export async function registerParticipant(
   eventId: string,
-  user: { id: string; name: string },
+  user: { id: string; name: string; email: string },
   input: z.infer<typeof registrationInput>,
 ) {
   // Repair older registrations first. Earlier versions/data imports may have
   // created a registration without its corresponding ticket.
-  const existingRegistration = await Registration.findOne({
-    eventId,
-    userId: user.id,
-  });
+  const existingRegistration = await Registration.findOne({ eventId, userId: user.id });
 
   if (existingRegistration) {
     if (existingRegistration.status !== "confirmed") {
@@ -137,6 +134,43 @@ export async function registerParticipant(
   ) {
     return fail(409, "REGISTRATION_CLOSED", "Registration is closed");
   }
+  const mode = event.participationType ?? "individual";
+  if (
+    (input.participationType === "team" && mode === "individual") ||
+    (input.participationType === "individual" && mode === "team")
+  )
+    return fail(400, "PARTICIPATION_TYPE_NOT_ALLOWED", "This event does not allow that registration type");
+  const team = input.participationType === "team";
+  if (team && !input.teamName?.trim())
+    return fail(400, "TEAM_NAME_REQUIRED", "Enter a team name");
+  const emails = team ? [...input.memberEmails] : [user.email];
+  if (new Set(emails).size !== emails.length)
+    return fail(400, "DUPLICATE_TEAM_MEMBER", "A participant can only appear once in a team");
+  const leaderWasProvided = emails.includes(user.email);
+  if (team && !event.teamLeaderIncluded && leaderWasProvided)
+    return fail(400, "TEAM_LEADER_EXCLUDED", "Do not include yourself in the counted team members");
+  if (team && event.teamLeaderIncluded && !leaderWasProvided) emails.push(user.email);
+  if (team && !emails.includes(user.email)) emails.push(user.email);
+  const memberUsers = await User.find({ email: { $in: emails }, role: "student", active: true })
+    .select("_id name email")
+    .lean();
+  if (memberUsers.length !== emails.length)
+    return fail(400, "INVALID_TEAM_MEMBER", "Every team member must use an active student account email");
+  const memberIds = memberUsers.map((member) => String(member._id));
+  if (new Set(memberIds).size !== memberIds.length)
+    return fail(400, "DUPLICATE_TEAM_MEMBER", "A participant can only appear once in a team");
+  const configuredSize = team
+    ? memberIds.length - Number(!event.teamLeaderIncluded)
+    : 1;
+  if (team && (configuredSize < event.teamMin || configuredSize > event.teamMax))
+    return fail(400, "INVALID_TEAM_SIZE", "Team size is outside event limits");
+  const alreadyRegistered = await Registration.findOne({
+    eventId,
+    status: "confirmed",
+    memberIds: { $in: memberIds },
+  }).select("_id").lean();
+  if (alreadyRegistered)
+    return fail(409, "MEMBER_ALREADY_REGISTERED", "A team member is already registered for this event");
   const session = await Event.db.startSession();
   let result:
     | {
@@ -147,23 +181,28 @@ export async function registerParticipant(
   let notificationId: string | undefined;
   try {
     await session.withTransaction(async () => {
+      const currentEvent = await Event.findOne({ _id: eventId, status: "published" }).session(session);
+      if (!currentEvent || currentEvent.startsAt <= new Date() || (currentEvent.registrationDeadline && currentEvent.registrationDeadline <= new Date()))
+        return fail(409, "REGISTRATION_CLOSED", "Registration is closed");
+      if ((currentEvent.participationType ?? "individual") !== mode || currentEvent.teamMin !== event.teamMin || currentEvent.teamMax !== event.teamMax || (currentEvent.teamLeaderIncluded ?? true) !== (event.teamLeaderIncluded ?? true))
+        return fail(409, "EVENT_CONFIGURATION_CHANGED", "Event participation rules changed. Reload and try again.");
       if (await Registration.exists({ eventId, userId: user.id }).session(session))
         return fail(409, "ALREADY_REGISTERED", "Already registered for this event");
-      const members = input.members.length ? input.members : [user.name];
-      if (members.length < event.teamMin || members.length > event.teamMax)
-        return fail(400, "INVALID_TEAM_SIZE", "Team size is outside event limits");
+      if (await Registration.exists({ eventId, status: "confirmed", memberIds: { $in: memberIds } }).session(session))
+        return fail(409, "MEMBER_ALREADY_REGISTERED", "A team member is already registered for this event");
+      const members = memberUsers.map((member) => member.name);
       const reserved = await Event.updateOne(
         {
           _id: eventId,
           status: "published",
-          registeredCount: { $lte: event.capacity - members.length },
+          registeredCount: { $lte: currentEvent.capacity - memberIds.length },
         },
-        { $inc: { registeredCount: members.length } },
+        { $inc: { registeredCount: memberIds.length } },
         { session },
       );
       if (!reserved.modifiedCount) return fail(409, "EVENT_FULL", "Event is full");
       const [registration] = await Registration.create(
-        [{ eventId, userId: user.id, teamName: input.teamName, members }],
+        [{ eventId, userId: user.id, teamName: team ? input.teamName : undefined, members, memberIds }],
         { session },
       );
       const [notification] = await Notification.create(
@@ -247,12 +286,13 @@ export async function cancelParticipantRegistration(
         { session },
       );
       notificationId = String(notification!._id);
+      const capacityCount = registration.members.length;
       const capacity = await Event.updateOne(
         {
           _id: registration.eventId,
-          registeredCount: { $gte: registration.members.length },
+          registeredCount: { $gte: capacityCount },
         },
-        { $inc: { registeredCount: -registration.members.length } },
+        { $inc: { registeredCount: -capacityCount } },
         { session },
       );
       if (!capacity.modifiedCount)
@@ -278,7 +318,9 @@ export async function cancelParticipantRegistration(
 }
 
 export async function getParticipantRegistrations(userId: string) {
-  return Registration.find({ userId }).lean();
+  return Registration.find({ $or: [{ userId }, { memberIds: userId }] })
+    .populate("userId", "name email")
+    .lean();
 }
 
 export async function getParticipantRegistration(
@@ -288,8 +330,8 @@ export async function getParticipantRegistration(
 ) {
   const row = await Registration.findOne({
     _id: registrationId,
-    ...(isAdmin ? {} : { userId }),
-  }).lean();
+    ...(isAdmin ? {} : { $or: [{ userId }, { memberIds: userId }] }),
+  }).populate("userId", "name email").lean();
   if (!row) return fail(404, "NOT_FOUND", "Registration not found");
   return row;
 }

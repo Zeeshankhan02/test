@@ -5,6 +5,7 @@ import {
   getMyCertificates,
   listCertificateTemplates,
   publishCertificates,
+  publishWinnerCertificate,
   revokeCertificate,
   updateCertificateTemplate,
   verifyCertificate,
@@ -28,6 +29,7 @@ certificatesRoutes.patch(
   updateCertificateTemplate,
 );
 certificatesRoutes.post("/certificates/publish", allow("admin"), publishCertificates);
+certificatesRoutes.post("/certificates/competitions/:quizId/winner", allow("admin"), publishWinnerCertificate);
 certificatesRoutes.get("/certificates/me", getMyCertificates);
 // Real PDF download; the service verifies recipient ownership + status.
 certificatesRoutes.get("/certificates/:certificateId/download", downloadMyCertificate);

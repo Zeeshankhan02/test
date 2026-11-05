@@ -1,7 +1,8 @@
 import { asyncRoute } from "../../common/utils/async-route.js";
 import { success } from "../../common/responses/success.js";
 import { objectId, parseBody } from "../../common/validators/object-id.js";
-import { quizInput, quizUpdateInput } from "./quizzes.validator.js";
+import { qualificationCorrectionInput, qualificationPublishInput, quizInput, quizUpdateInput, rankingCorrectionInput, round2DraftInput, round3DraftInput } from "./quizzes.validator.js";
+import { confirmCompetitionWinner, correctPublishedRankings, correctQualification, getCompetition, prepareQualification, publishQualification, publishRoundRankings, saveRoundRankings } from "./competition.service.js";
 import {
   addQuiz,
   announceQuizResults,
@@ -122,4 +123,44 @@ export const retryFinalization = asyncRoute(async (req, res) =>
     res,
     await resumeFinalization(req.principal!.id, parseBody(objectId, req.params.quizId)),
   ),
+);
+
+export const competitionState = asyncRoute(async (req, res) =>
+  success(res, await getCompetition(parseBody(objectId, req.params.quizId), req.principal!.id, req.principal!.role === "admin")),
+);
+export const qualificationPreview = asyncRoute(async (req, res) =>
+  success(res, await prepareQualification(req.principal!.id, parseBody(objectId, req.params.quizId))),
+);
+export const qualificationPublish = asyncRoute(async (req, res) => {
+  const input = parseBody(qualificationPublishInput, req.body);
+  return success(res, await publishQualification(req.principal!.id, parseBody(objectId, req.params.quizId), input.userIds, input.reason));
+});
+export const qualificationCorrect = asyncRoute(async (req, res) => {
+  const input = parseBody(qualificationCorrectionInput, req.body);
+  return success(res, await correctQualification(req.principal!.id, parseBody(objectId, req.params.quizId), input.userIds, input.reason));
+});
+export const saveRound2 = asyncRoute(async (req, res) => {
+  const input = parseBody(round2DraftInput, req.body);
+  return success(res, await saveRoundRankings(req.principal!.id, parseBody(objectId, req.params.quizId), 2, input.rankings, input.advancementLimit));
+});
+export const publishRound2 = asyncRoute(async (req, res) =>
+  success(res, await publishRoundRankings(req.principal!.id, parseBody(objectId, req.params.quizId), 2)),
+);
+export const saveRound3 = asyncRoute(async (req, res) => {
+  const input = parseBody(round3DraftInput, req.body);
+  return success(res, await saveRoundRankings(req.principal!.id, parseBody(objectId, req.params.quizId), 3, input.rankings));
+});
+export const publishRound3 = asyncRoute(async (req, res) =>
+  success(res, await publishRoundRankings(req.principal!.id, parseBody(objectId, req.params.quizId), 3)),
+);
+export const correctRound2 = asyncRoute(async (req, res) => {
+  const input = parseBody(rankingCorrectionInput, req.body);
+  return success(res, await correctPublishedRankings(req.principal!.id, parseBody(objectId, req.params.quizId), 2, input.rankings, input.reason));
+});
+export const correctRound3 = asyncRoute(async (req, res) => {
+  const input = parseBody(rankingCorrectionInput, req.body);
+  return success(res, await correctPublishedRankings(req.principal!.id, parseBody(objectId, req.params.quizId), 3, input.rankings, input.reason));
+});
+export const confirmWinner = asyncRoute(async (req, res) =>
+  success(res, await confirmCompetitionWinner(req.principal!.id, parseBody(objectId, req.params.quizId))),
 );

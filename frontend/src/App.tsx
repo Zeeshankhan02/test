@@ -52,7 +52,11 @@ import {
   festDateLabel,
   useFestDates,
   type ApiAdminQuiz,
+  type ApiCompetition,
+  type ApiCompetitionRank,
+  type ApiCompetitionProgress,
   type ApiCertificate,
+  type ApiCertificateTemplate,
   type ApiFestDates,
   type ApiQuiz,
   type ApiQuizResultRow,
@@ -1427,6 +1431,12 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
   }, [eventId]);
   const { user } = useAuth();
   const [registering, setRegistering] = useState(false);
+  const [registrationType, setRegistrationType] = useState<"individual" | "team">("individual");
+  const [teamName, setTeamName] = useState("");
+  const [memberEmailsText, setMemberEmailsText] = useState("");
+  useEffect(() => {
+    if (event?.participationType === "team") setRegistrationType("team");
+  }, [event?.participationType]);
   const [registrationStatus, setRegistrationStatus] = useState<
     "checking" | "available" | "registered" | "error"
   >("checking");
@@ -1456,7 +1466,8 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
     if (!user || registering || registrationStatus !== "available") return;
     setRegistering(true);
     try {
-      await api.register(event.id, [user.name]);
+      const memberEmails = memberEmailsText.split(/[\n,]+/).map((email) => email.trim()).filter(Boolean);
+      await api.register(event.id, registrationType, teamName.trim(), memberEmails);
       setRegistrationStatus("registered");
       toast(`You’re registered for ${event.title}. Your ticket is ready.`);
     } catch (cause) {
@@ -1469,6 +1480,17 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
       setRegistering(false);
     }
   };
+  const requestedMemberEmails = memberEmailsText.split(/[\n,]+/).map((email) => email.trim()).filter(Boolean);
+  const normalizedTeamEmails = requestedMemberEmails.map((email) => email.toLowerCase());
+  const leaderEmailIncluded = Boolean(user?.email && normalizedTeamEmails.includes(user.email.toLowerCase()));
+  const configuredTeamSize = requestedMemberEmails.length + Number(Boolean(event.teamLeaderIncluded && !leaderEmailIncluded));
+  const teamEmailError = normalizedTeamEmails.some((email, index) => normalizedTeamEmails.indexOf(email) !== index)
+    ? "Remove duplicate member emails."
+    : normalizedTeamEmails.some((email) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      ? "Enter a valid student account email for each member."
+      : !event.teamLeaderIncluded && user?.email && normalizedTeamEmails.includes(user.email.toLowerCase())
+        ? "The leader is added automatically; do not include your own email."
+        : "";
   return (
     <>
       <Link to="/student/events" className="back-link">
@@ -1525,6 +1547,29 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
             <Users />
             {event.registered} of {event.maxParticipants} spots filled
           </p>
+          {(event.participationType === "both") && (
+            <label>
+              Participation type
+              <select value={registrationType} onChange={(e) => setRegistrationType(e.target.value as "individual" | "team")}>
+                <option value="individual">Solo registration</option>
+                <option value="team">Team registration</option>
+              </select>
+            </label>
+          )}
+          {(event.participationType === "team" || (event.participationType === "both" && registrationType === "team")) && (
+            <>
+              <label>
+                Team name
+                <input value={teamName} onChange={(e) => setTeamName(e.target.value)} maxLength={100} placeholder="Enter team name" />
+              </label>
+              <label>
+                Teammate account emails ({event.teamMin}–{event.teamMax} counted members; your leader account is added automatically)
+                <textarea value={memberEmailsText} onChange={(e) => setMemberEmailsText(e.target.value)} placeholder="Add one student account email per line" />
+              </label>
+              {teamEmailError && <small className="auth-error" role="alert">{teamEmailError}</small>}
+              <small>Team preview: {user?.name} (leader){requestedMemberEmails.filter((email) => email.toLowerCase() !== user?.email.toLowerCase()).length ? ` · ${requestedMemberEmails.filter((email) => email.toLowerCase() !== user?.email.toLowerCase()).join(" · ")}` : " · Add your teammates above"}</small>
+            </>
+          )}
           <button
             className="btn btn-dark btn-wide"
             onClick={() => void register()}
@@ -1532,7 +1577,8 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
               registering ||
               registrationStatus === "checking" ||
               registrationStatus === "registered" ||
-              registrationStatus === "error"
+              registrationStatus === "error" ||
+              (registrationType === "team" && (teamName.trim().length < 2 || !/^[\p{L}\p{N} _.-]+$/u.test(teamName.trim()) || !!teamEmailError || configuredTeamSize < (event.teamMin ?? 2) || configuredTeamSize > (event.teamMax ?? 20)))
             }
           >
             {registrationStatus === "registered"
@@ -1623,6 +1669,10 @@ function TicketsPage({ toast }: { toast: (s: string) => void }) {
                     <span>PARTICIPANT</span>
                     <b>{user?.name}</b>
                   </div>
+                  {registration.teamName && <div>
+                    <span>TEAM LEADER</span>
+                    <b>{typeof registration.userId === "object" ? registration.userId.name : user?.name}</b>
+                  </div>}
                   <div>
                     <span>TEAM</span>
                     <b>
@@ -1630,6 +1680,7 @@ function TicketsPage({ toast }: { toast: (s: string) => void }) {
                       {registration.members.length} member
                       {registration.members.length === 1 ? "" : "s"}
                     </b>
+                    {registration.teamName && <small>Members: {registration.members.join(", ")}</small>}
                   </div>
                 </div>
               </div>
@@ -1697,8 +1748,14 @@ function QuizzesPage({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const active = quizzes.find((q) => q.status === "published") ?? quizzes[0];
+  const [competitionProgress, setCompetitionProgress] = useState<ApiCompetitionProgress | null>(null);
   const serverOffset = useRef(0);
   const finalizedRef = useRef(false);
+
+  useEffect(() => {
+    setCompetitionProgress(null);
+    if (active) void api.competitionProgress(active._id).then(setCompetitionProgress).catch(() => setCompetitionProgress(null));
+  }, [active?._id]);
 
   // tick every second while playing so server deadlines drive the UI
   useEffect(() => {
@@ -1853,6 +1910,15 @@ function QuizzesPage({
           {error}
         </p>
       )}
+      {competitionProgress && <section className="panel competition-progress" aria-label="My quiz competition progress">
+        <h2>Three-round competition</h2>
+        {!competitionProgress.round1Published ? <p>Round 1: {competitionProgress.round1Started ? (competitionProgress.round1Submitted ? "Attempt submitted" : "Attempt in progress") : "Not started"}. Waiting for finalized results.</p> : <p>Round 1: {competitionProgress.round1Score ?? "No submitted score"} points{competitionProgress.round1Rank ? ` · rank ${competitionProgress.round1Rank}` : ""}.</p>}
+        {competitionProgress.qualified !== null && <p>{competitionProgress.qualified ? "Qualified for Round 2." : "Did not qualify for Round 2."}</p>}
+        {competitionProgress.qualified === null && competitionProgress.round1Published && <p>Round 1 qualification is being reviewed.</p>}
+        {competitionProgress.round2 && <p>Round 2: rank {competitionProgress.round2.rank}{competitionProgress.round2.score != null ? ` · ${competitionProgress.round2.score} points` : ""}.</p>}
+        {competitionProgress.round3 && <p>Final Round 3: rank {competitionProgress.round3.rank}{competitionProgress.round3.score != null ? ` · ${competitionProgress.round3.score} points` : ""}.</p>}
+        {competitionProgress.isWinner && <p>Winner confirmed. {competitionProgress.winnerCertificate ? <Link to="/student/certificates">View your winner certificate</Link> : "Your certificate is being prepared."}</p>}
+      </section>}
       {!active && !play ? (
         <Empty
           icon={<CircleHelp />}
@@ -2922,6 +2988,10 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [capacity, setCapacity] = useState(100);
+  const [participationType, setParticipationType] = useState<EventDraft["participationType"]>("individual");
+  const [teamMin, setTeamMin] = useState(2);
+  const [teamMax, setTeamMax] = useState(5);
+  const [teamLeaderIncluded, setTeamLeaderIncluded] = useState(true);
   const [imagePreview, setImagePreview] = useState("");
   const [imagePublicId, setImagePublicId] = useState("");
   const [existingImageId, setExistingImageId] = useState("");
@@ -2979,6 +3049,10 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
             onClick={() => {
               setEditingId(null);
               setError("");
+              setParticipationType("individual");
+              setTeamMin(2);
+              setTeamMax(5);
+              setTeamLeaderIncluded(true);
               resetImageState();
               setModal(true);
             }}
@@ -3026,6 +3100,10 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                     setStartsAt(localDate(record.startsAt));
                     setEndsAt(localDate(record.endsAt));
                     setCapacity(record.capacity);
+                    setParticipationType(record.participationType || "individual");
+                    setTeamMin(record.teamMin ?? 2);
+                    setTeamMax(record.teamMax ?? 5);
+                    setTeamLeaderIncluded(record.teamLeaderIncluded ?? true);
                     resetImageState(
                       record.image || "",
                       record.imagePublicId || "",
@@ -3271,6 +3349,30 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
               required
             />
           </label>
+          <label>
+            Participation type
+            <select value={participationType} onChange={(e) => setParticipationType(e.target.value as EventDraft["participationType"])}>
+              <option value="individual">Individual / Solo</option>
+              <option value="team">Team</option>
+              <option value="both">Individual and Team</option>
+            </select>
+          </label>
+          {participationType !== "individual" && (
+            <>
+              <label>
+                Minimum team size
+                <input type="number" min={2} max={20} value={teamMin} onChange={(e) => setTeamMin(Number(e.target.value))} />
+              </label>
+              <label>
+                Maximum team size
+                <input type="number" min={teamMin} max={20} value={teamMax} onChange={(e) => setTeamMax(Number(e.target.value))} />
+              </label>
+              <label className="checkbox-label">
+                <input type="checkbox" checked={teamLeaderIncluded} onChange={(e) => setTeamLeaderIncluded(e.target.checked)} />
+                Count the team leader in the team size
+              </label>
+            </>
+          )}
           {error && (
             <p className="auth-error" role="alert">
               {error}
@@ -3284,6 +3386,7 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
               className="btn btn-dark"
               disabled={
                 saving ||
+                (participationType !== "individual" && (teamMin < 2 || teamMax < teamMin)) ||
                 !name.trim() ||
                 !description.trim() ||
                 !venue.trim() ||
@@ -3301,8 +3404,10 @@ function AdminEvents({ toast }: { toast: (s: string) => void }) {
                   startsAt: new Date(startsAt).toISOString(),
                   endsAt: new Date(endsAt).toISOString(),
                   capacity,
-                  teamMin: 1,
-                  teamMax: 1,
+                  participationType,
+                  teamMin: participationType === "individual" ? 1 : teamMin,
+                  teamMax: participationType === "individual" ? 1 : teamMax,
+                  teamLeaderIncluded,
                 };
                 // Image flow: the poster is previewed locally first and only
                 // pushed to Cloudinary when the admin publishes. If the save
@@ -4101,6 +4206,17 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
     quiz: ApiAdminQuiz;
     rows: ApiQuizResultRow[];
   } | null>(null);
+  const [competitionFor, setCompetitionFor] = useState<ApiAdminQuiz | null>(null);
+  const [competition, setCompetition] = useState<ApiCompetition | null>(null);
+  const [qualifiedIds, setQualifiedIds] = useState<string[]>([]);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [round2Draft, setRound2Draft] = useState<ApiCompetitionRank[]>([]);
+  const [round3Draft, setRound3Draft] = useState<ApiCompetitionRank[]>([]);
+  const [advancementLimit, setAdvancementLimit] = useState(3);
+  const [winnerTemplates, setWinnerTemplates] = useState<ApiCertificateTemplate[]>([]);
+  const [winnerTemplateId, setWinnerTemplateId] = useState("");
+  const [correctionRound, setCorrectionRound] = useState<0 | 1 | 2 | 3>(0);
+  const [correctionReason, setCorrectionReason] = useState("");
   const refresh = () => {
     setLoading(true);
     void api
@@ -4140,6 +4256,39 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
           cause instanceof Error ? cause.message : "Could not load results.",
         ),
       )
+      .finally(() => setBusyId(""));
+  };
+  const openCompetition = (quiz: ApiAdminQuiz) => {
+    setBusyId(quiz.id);
+    void Promise.all([api.competition(quiz.id), api.certificateTemplates()]).then(([state, templates]) => {
+      setCompetitionFor(quiz);
+      setCompetition(state);
+      const matchingTemplates = templates.filter((template) => template.eventId === quiz.eventId);
+      setWinnerTemplates(matchingTemplates);
+      setWinnerTemplateId(matchingTemplates[0]?._id || "");
+      setQualifiedIds(state.qualifiedParticipants.length ? state.qualifiedParticipants.map((row) => row.userId) : []);
+      setRound2Draft(state.round2Rankings || []);
+      setRound3Draft(state.round3Rankings || []);
+      setAdvancementLimit(state.round3AdvancementLimit || 3);
+      setCorrectionRound(0);
+      setCorrectionReason("");
+    }).catch((cause: unknown) => toast(cause instanceof Error ? cause.message : "Could not load competition."))
+      .finally(() => setBusyId(""));
+  };
+  const reloadCompetition = async () => {
+    if (!competitionFor) return;
+    const state = await api.competition(competitionFor.id);
+    setCompetition(state);
+    if (state.qualificationPublishedAt) setQualifiedIds(state.qualifiedParticipants.map((row) => row.userId));
+    setRound2Draft(state.round2Rankings || []);
+    setRound3Draft(state.round3Rankings || []);
+    setAdvancementLimit(state.round3AdvancementLimit || 3);
+  };
+  const compAction = (action: () => Promise<unknown>, message: string) => {
+    if (!competitionFor) return;
+    setBusyId(competitionFor.id);
+    void action().then(async () => { await reloadCompetition(); setCorrectionRound(0); setCorrectionReason(""); toast(message); })
+      .catch((cause: unknown) => toast(cause instanceof Error ? cause.message : "Competition update failed."))
       .finally(() => setBusyId(""));
   };
   return (
@@ -4263,6 +4412,7 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
                   View results
                 </button>
               )}
+              {quiz.resultsPublishedAt && <button className="btn btn-outline" disabled={!!busyId} onClick={() => openCompetition(quiz)}>Competition</button>}
             </div>
           </div>
         ))}
@@ -4299,6 +4449,63 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
           </div>
         </Modal>
       )}
+      {competitionFor && competition && (
+        <Modal title={`Competition — ${competitionFor.title}`} close={() => { setCompetitionFor(null); setCompetition(null); }}>
+          <h3>Round 1 qualification</h3>
+          {!competition.qualificationPublishedAt && <button className="btn btn-outline" disabled={!!busyId} onClick={() => compAction(async () => { const candidates = await api.prepareQualification(competitionFor.id); setQualifiedIds(candidates.filter((row) => row.rank <= 10).map((row) => row.userId)); await reloadCompetition(); }, "Qualification candidates refreshed")}>Prepare top 10</button>}
+          {competition.qualificationCandidates.map((row) => <label key={row.userId} className="competition-choice"><input type="checkbox" disabled={!!competition.round2PublishedAt || (!!competition.qualificationPublishedAt && correctionRound !== 1)} checked={qualifiedIds.includes(row.userId)} onChange={(e) => setQualifiedIds((old) => e.target.checked ? [...old, row.userId] : old.filter((id) => id !== row.userId))} /> Rank {row.rank} · {row.participant?.name || "Unknown"} ({row.participant?.email || ""}) · {row.score} points · submitted {row.submittedAt ? new Date(row.submittedAt).toLocaleTimeString() : "—"}{row.rank === 10 && competition.qualificationCandidates.filter((item) => item.score === row.score).length > 1 ? " · cutoff tie" : ""}</label>)}
+          {!competition.qualificationPublishedAt && competition.qualificationCandidates.length > 0 && <>
+            <label>Reason for changing the suggested list (required if changed)<textarea value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} maxLength={500} /></label>
+            <button className="btn btn-dark" disabled={!!busyId || !qualifiedIds.length} onClick={() => { if (window.confirm(`Publish ${qualifiedIds.length} Round 2 qualifiers?`)) compAction(() => api.publishQualification(competitionFor.id, qualifiedIds, overrideReason), "Qualified participants published"); }}>Publish qualification</button>
+          </>}
+          {competition.qualificationPublishedAt && !competition.round2PublishedAt && <>
+            <button className="btn btn-outline" onClick={() => { setCorrectionRound(correctionRound === 1 ? 0 : 1); setCorrectionReason(""); }}>Correct qualification</button>
+            {correctionRound === 1 && <><label>Correction reason<textarea value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} maxLength={500} /></label><button className="btn btn-dark" disabled={!!busyId || !qualifiedIds.length || !correctionReason.trim()} onClick={() => compAction(() => api.correctQualification(competitionFor.id, qualifiedIds, correctionReason), "Qualification corrected")}>Save audited correction</button></>}
+          </>}
+          {competition.qualificationPublishedAt && <>
+            <h3>Round 2 rankings</h3>
+            {competition.round2PublishedAt && !competition.round3PublishedAt && <button className="btn btn-outline" onClick={() => { setCorrectionRound(correctionRound === 2 ? 0 : 2); setCorrectionReason(""); }}>Correct published rankings</button>}
+            {round2Draft.map((row, index) => <div className="competition-rank-entry" key={`${row.userId}-${index}`}>
+              <select value={row.userId} disabled={!!competition.round2PublishedAt && correctionRound !== 2} onChange={(e) => setRound2Draft((old) => old.map((item, i) => i === index ? { ...item, userId: e.target.value } : item))}>
+                <option value="">Select qualified participant</option>{competition.qualifiedParticipants.map((person) => <option key={person.userId} value={person.userId}>{person.participant?.name} · {person.participant?.email}</option>)}
+              </select><input aria-label="Round 2 rank" type="number" min={1} value={row.rank} disabled={!!competition.round2PublishedAt && correctionRound !== 2} onChange={(e) => setRound2Draft((old) => old.map((item, i) => i === index ? { ...item, rank: Number(e.target.value) } : item))} /><input aria-label="Round 2 score" type="number" min={0} value={row.score ?? ""} placeholder="Score" disabled={!!competition.round2PublishedAt && correctionRound !== 2} onChange={(e) => setRound2Draft((old) => old.map((item, i) => i === index ? { ...item, score: e.target.value === "" ? undefined : Number(e.target.value) } : item))} /><input aria-label="Round 2 notes" value={row.notes || ""} placeholder="Remarks" disabled={!!competition.round2PublishedAt && correctionRound !== 2} onChange={(e) => setRound2Draft((old) => old.map((item, i) => i === index ? { ...item, notes: e.target.value } : item))} />
+              {!competition.round2PublishedAt && <button className="btn btn-outline" onClick={() => setRound2Draft((old) => old.filter((_, i) => i !== index))}>Remove</button>}
+            </div>)}
+            {!competition.round2PublishedAt && <>
+              <button className="btn btn-outline" onClick={() => setRound2Draft((old) => [...old, { userId: "", rank: old.length + 1 }])}>Add participant</button>
+              <label>Advance to Round 3<input type="number" min={1} max={10} value={advancementLimit} onChange={(e) => setAdvancementLimit(Number(e.target.value))} /><small>Top {advancementLimit} Round 2 ranks advance.</small></label>
+              <button className="btn btn-outline" disabled={!!busyId || !round2Draft.length || round2Draft.some((row) => !row.userId)} onClick={() => compAction(() => api.saveRound2(competitionFor.id, round2Draft, advancementLimit), "Round 2 draft saved")}>Save Round 2 draft</button>
+              <button className="btn btn-dark" disabled={!!busyId} onClick={() => { if (window.confirm("Publish Round 2 rankings?")) compAction(() => api.publishRound2(competitionFor.id), "Round 2 published"); }}>Publish Round 2</button>
+            </>}
+            {correctionRound === 2 && <><label>Correction reason<textarea value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} maxLength={500} /></label><button className="btn btn-dark" disabled={!!busyId || !correctionReason.trim()} onClick={() => compAction(() => api.correctRound2(competitionFor.id, round2Draft, correctionReason), "Round 2 correction saved")}>Save audited correction</button></>}
+          </>}
+          {competition.round2PublishedAt && <>
+            <h3>Round 3 final rankings</h3>
+            {competition.round3PublishedAt && !competition.winnerConfirmedAt && <button className="btn btn-outline" onClick={() => { setCorrectionRound(correctionRound === 3 ? 0 : 3); setCorrectionReason(""); }}>Correct published final rankings</button>}
+            {round3Draft.map((row, index) => <div className="competition-rank-entry" key={`${row.userId}-${index}`}>
+              <select value={row.userId} disabled={!!competition.round3PublishedAt && correctionRound !== 3} onChange={(e) => setRound3Draft((old) => old.map((item, i) => i === index ? { ...item, userId: e.target.value } : item))}>
+                <option value="">Select advancing participant</option>{competition.round2Rankings.filter((person) => person.rank <= advancementLimit).map((person) => <option key={person.userId} value={person.userId}>{person.participant?.name} · rank {person.rank}</option>)}
+              </select><input aria-label="Round 3 rank" type="number" min={1} value={row.rank} disabled={!!competition.round3PublishedAt && correctionRound !== 3} onChange={(e) => setRound3Draft((old) => old.map((item, i) => i === index ? { ...item, rank: Number(e.target.value) } : item))} /><input aria-label="Round 3 score" type="number" min={0} value={row.score ?? ""} placeholder="Score" disabled={!!competition.round3PublishedAt && correctionRound !== 3} onChange={(e) => setRound3Draft((old) => old.map((item, i) => i === index ? { ...item, score: e.target.value === "" ? undefined : Number(e.target.value) } : item))} /><input aria-label="Round 3 notes" value={row.notes || ""} placeholder="Remarks" disabled={!!competition.round3PublishedAt && correctionRound !== 3} onChange={(e) => setRound3Draft((old) => old.map((item, i) => i === index ? { ...item, notes: e.target.value } : item))} />
+              {!competition.round3PublishedAt && <button className="btn btn-outline" onClick={() => setRound3Draft((old) => old.filter((_, i) => i !== index))}>Remove</button>}
+            </div>)}
+            {!competition.round3PublishedAt && <>
+              <button className="btn btn-outline" onClick={() => setRound3Draft((old) => [...old, { userId: "", rank: old.length + 1 }])}>Add participant</button>
+              <button className="btn btn-outline" disabled={!!busyId || !round3Draft.length || round3Draft.some((row) => !row.userId)} onClick={() => compAction(() => api.saveRound3(competitionFor.id, round3Draft), "Round 3 draft saved")}>Save final draft</button>
+              <button className="btn btn-dark" disabled={!!busyId} onClick={() => { if (window.confirm("Publish final rankings?")) compAction(() => api.publishRound3(competitionFor.id), "Final rankings published"); }}>Publish final results</button>
+            </>}
+            {correctionRound === 3 && <><label>Correction reason<textarea value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} maxLength={500} /></label><button className="btn btn-dark" disabled={!!busyId || !correctionReason.trim()} onClick={() => compAction(() => api.correctRound3(competitionFor.id, round3Draft, correctionReason), "Final ranking correction saved")}>Save audited correction</button></>}
+          </>}
+          {competition.round3PublishedAt && !competition.winnerConfirmedAt && <button className="btn btn-dark" disabled={!!busyId} onClick={() => { if (window.confirm("Confirm the first-ranked participant as the winner?")) compAction(() => api.confirmCompetitionWinner(competitionFor.id), "Winner confirmed"); }}>Confirm winner</button>}
+          {competition.winnerConfirmedAt && <p role="status">Winner confirmed: {competition.round3Rankings.find((row) => row.userId === competition.winnerUserId)?.participant?.name || "participant"}</p>}
+          {competition.winnerConfirmedAt && !competition.winnerCertificate && <>
+            <h3>Winner certificate</h3>
+            <p>Choose a certificate template for {competition.round3Rankings.find((row) => row.userId === competition.winnerUserId)?.participant?.name || "the winner"}. A published winner certificate becomes available in that participant&apos;s certificate list.</p>
+            <label>Source template<select value={winnerTemplateId} onChange={(e) => setWinnerTemplateId(e.target.value)}><option value="">Choose a template</option>{winnerTemplates.map((template) => <option key={template._id} value={template._id}>{template.title} · {template.status}</option>)}</select></label>
+            <button className="btn btn-dark" disabled={!!busyId || !winnerTemplateId} onClick={() => { if (window.confirm("Issue and publish this winner certificate?")) compAction(() => api.publishWinnerCertificate(competitionFor.id, winnerTemplateId), "Winner certificate published"); }}>Publish winner certificate</button>
+          </>}
+          {competition.winnerCertificate && <p role="status">Winner certificate published · {competition.winnerCertificate.certificateId}</p>}
+        </Modal>
+      )}
     </>
   );
 }
@@ -4309,6 +4516,8 @@ function StudentCertificates() {
   );
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState("");
+  const [viewing, setViewing] = useState<{ url: string; title: string } | null>(null);
+  useEffect(() => () => { if (viewing?.url) URL.revokeObjectURL(viewing.url); }, [viewing?.url]);
   useEffect(() => {
     void api
       .myCertificates()
@@ -4367,6 +4576,16 @@ function StudentCertificates() {
                 setDownloading(certificate._id);
                 void api
                   .downloadCertificate(certificate._id)
+                  .then((blob) => {
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement("a");
+                    link.href = url;
+                    link.download = `${certificate.certificateId}.pdf`;
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+                  })
                   .catch((cause: unknown) =>
                     setError(
                       cause instanceof Error
@@ -4380,9 +4599,24 @@ function StudentCertificates() {
               <Download size={15} />{" "}
               {downloading === certificate._id ? "Downloading…" : "Download"}
             </button>
+            <button
+              className="btn btn-outline"
+              disabled={downloading === certificate._id}
+              onClick={() => {
+                setDownloading(certificate._id);
+                void api.downloadCertificate(certificate._id)
+                  .then((blob) => {
+                    const url = URL.createObjectURL(blob);
+                    setViewing({ url, title: template?.title ?? "Certificate" });
+                  })
+                  .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not open certificate."))
+                  .finally(() => setDownloading(""));
+              }}
+            >View</button>
           </div>
         );
       })}
+      {viewing && <Modal title={viewing.title} close={() => setViewing(null)}><iframe title={viewing.title} src={viewing.url} style={{ width: "min(80vw, 900px)", height: "70vh", border: 0 }} /></Modal>}
     </div>
   );
 }

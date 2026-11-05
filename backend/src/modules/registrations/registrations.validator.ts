@@ -9,6 +9,7 @@ export const registrationsQuery = z.object({
 });
 
 export const registrationInput = z.object({
-  teamName: z.string().trim().max(100).optional(),
-  members: z.array(z.string().trim().min(1).max(100)).max(20).default([]),
+  participationType: z.enum(["individual", "team"]).default("individual"),
+  teamName: z.string().trim().min(2).max(100).regex(/^[\p{L}\p{N} _.-]+$/u).optional(),
+  memberEmails: z.array(z.email().trim().toLowerCase()).max(20).default([]),
 });

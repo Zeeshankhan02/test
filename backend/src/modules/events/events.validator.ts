@@ -11,13 +11,16 @@ const eventFields = z.object({
   capacity: z.number().int().min(1),
   teamMin: z.number().int().min(1).default(1),
   teamMax: z.number().int().min(1).default(1),
+  participationType: z.enum(["individual", "team", "both"]).default("individual"),
+  teamLeaderIncluded: z.boolean().default(true),
   image: z.union([z.url(), z.literal("")]).optional(),
 });
 
 export const eventInput = eventFields.refine(
   (event) =>
     Date.parse(event.endsAt) > Date.parse(event.startsAt) &&
-    event.teamMax >= event.teamMin,
+    event.teamMax >= event.teamMin &&
+    (event.participationType === "individual" || event.teamMin >= 2),
   "Invalid event dates or team size",
 );
 
