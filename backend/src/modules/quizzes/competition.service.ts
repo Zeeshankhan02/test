@@ -1,6 +1,7 @@
 import { Types } from "mongoose";
 import { fail } from "../../common/errors/app-error.js";
 import { recordAudit } from "../../common/utils/audit.js";
+import { announceEventToRegistrants } from "../notifications/notifications.service.js";
 import { Certificate, Quiz, QuizAttempt, Registration, User } from "../models.js";
 
 type RankInput = { userId: string; rank: number; score?: number | undefined; notes?: string | undefined };
@@ -66,8 +67,19 @@ export async function publishQualification(adminId: string, quizId: string, user
     { new: true },
   );
   if (!saved) return fail(409, "QUALIFICATION_PUBLISHED", "Qualification was published by another administrator");
-  await recordAudit(adminId, "quiz.qualification.published", "quiz", quizId, { qualified: confirmed.length, overrideReason: changed ? reason!.trim() : "" });
-  return decorateCandidates(confirmed);
+  const delivery = await announceEventToRegistrants(
+    String(quiz.eventId),
+    `Quiz qualification announced: ${quiz.title}`,
+    `${confirmed.length} participant${confirmed.length === 1 ? " has" : "s have"} qualified for Round 2 of ${quiz.title}. View the quiz page for your status.`,
+  );
+  await recordAudit(adminId, "quiz.qualification.published", "quiz", quizId, {
+    qualified: confirmed.length,
+    overrideReason: changed ? reason!.trim() : "",
+    delivered: delivery.delivered,
+    emailSent: delivery.email.sent,
+    emailFailed: delivery.email.failed,
+  });
+  return { ...delivery, participants: await decorateCandidates(confirmed) };
 }
 
 export async function correctQualification(adminId: string, quizId: string, userIds: string[], reason: string) {
@@ -122,7 +134,7 @@ export async function saveRoundRankings(adminId: string, quizId: string, round: 
       ? { qualificationPublishedAt: { $exists: true }, round2PublishedAt: { $exists: false } }
       : { round2PublishedAt: { $exists: true }, round3PublishedAt: { $exists: false } }),
   }, { $set: updates });
-  if (!saved.modifiedCount) return fail(409, "ROUND_PUBLISHED", "Round state changed while saving the draft");
+  if (!saved.matchedCount) return fail(409, "ROUND_PUBLISHED", "Round state changed while saving the draft");
   await recordAudit(adminId, `quiz.round${round}.draft.saved`, "quiz", quizId, { participants: rows.length });
   return rows;
 }
@@ -133,15 +145,28 @@ export async function publishRoundRankings(adminId: string, quizId: string, roun
   if (round === 2 && !quiz.qualificationPublishedAt) return fail(409, "QUALIFICATION_REQUIRED", "Publish Round 1 qualification first");
   if (round === 3 && !quiz.round2PublishedAt) return fail(409, "ROUND2_REQUIRED", "Publish Round 2 rankings first");
   const rows = (round === 2 ? quiz.round2Rankings : quiz.round3Rankings) as RankInput[];
-  const eligible = round === 2
-    ? (quiz.qualifiedParticipants as Candidate[]).length
-    : (quiz.round2Rankings as RankInput[]).filter((row) => row.rank <= (quiz.round3AdvancementLimit ?? 3)).length;
-  if (!rows.length || rows.length !== eligible) return fail(409, "RANKINGS_INCOMPLETE", "Save a complete ranking for every eligible participant");
+  const eligibleIds = round === 2
+    ? (quiz.qualifiedParticipants as Candidate[]).map((row) => row.userId)
+    : (quiz.round2Rankings as RankInput[]).filter((row) => row.rank <= (quiz.round3AdvancementLimit ?? 3)).map((row) => row.userId);
+  const ids = rows.map((row) => row.userId);
+  const ranks = rows.map((row) => row.rank);
+  if (!eligibleIds.length || rows.length !== eligibleIds.length || new Set(ids).size !== ids.length || eligibleIds.some((id) => !ids.includes(id)) || new Set(ranks).size !== ranks.length || ranks.some((rank) => !Number.isInteger(rank) || rank < 1 || rank > rows.length))
+    return fail(409, "RANKINGS_INCOMPLETE", `Round ${round} has ${rows.length} valid saved rankings for ${eligibleIds.length} eligible participants. Save a complete ranking with unique participants and ranks before publishing.`);
   const field = round === 2 ? "round2PublishedAt" : "round3PublishedAt";
   const updated = await Quiz.findOneAndUpdate({ _id: quizId, [field]: { $exists: false } }, { $set: { [field]: new Date() } }, { new: true });
   if (!updated) return fail(409, "ROUND_PUBLISHED", "Rankings are already published");
-  await recordAudit(adminId, `quiz.round${round}.published`, "quiz", quizId, { participants: rows.length });
-  return { publishedAt: updated.get(field), rankings: rows };
+  const delivery = await announceEventToRegistrants(
+    String(quiz.eventId),
+    `Round ${round} results: ${quiz.title}`,
+    `Round ${round} rankings for ${quiz.title} have been published. Sign in to view the leaderboard and your result.`,
+  );
+  await recordAudit(adminId, `quiz.round${round}.published`, "quiz", quizId, {
+    participants: rows.length,
+    delivered: delivery.delivered,
+    emailSent: delivery.email.sent,
+    emailFailed: delivery.email.failed,
+  });
+  return { publishedAt: updated.get(field), rankings: rows, ...delivery };
 }
 
 export async function correctPublishedRankings(adminId: string, quizId: string, round: 2 | 3, rows: RankInput[], reason: string) {
@@ -167,6 +192,11 @@ export async function correctPublishedRankings(adminId: string, quizId: string, 
     { new: true },
   );
   if (!updated) return fail(409, "ROUND_CORRECTION_CONFLICT", "Competition advanced while saving the correction");
+  if (round === 3)
+    await Certificate.updateMany(
+      { competitionId: quizId, awardType: "winner", staleAt: { $exists: false } },
+      { $set: { staleAt: new Date(), revokedAt: new Date() } },
+    );
   await recordAudit(adminId, `quiz.round${round}.corrected`, "quiz", quizId, { reason, previous: JSON.stringify(current), corrected: JSON.stringify(rows) });
   return rows;
 }
@@ -175,13 +205,46 @@ export async function confirmCompetitionWinner(adminId: string, quizId: string) 
   const quiz = await Quiz.findById(quizId);
   if (!quiz) return fail(404, "NOT_FOUND", "Quiz not found");
   if (!quiz.round3PublishedAt) return fail(409, "ROUND3_REQUIRED", "Publish Round 3 before confirming the winner");
-  if (quiz.winnerConfirmedAt) return fail(409, "WINNER_CONFIRMED", "Winner is already confirmed");
   const first = (quiz.round3Rankings as RankInput[]).filter((row) => row.rank === 1);
   if (first.length !== 1) return fail(409, "WINNER_AMBIGUOUS", "Round 3 must have one first-ranked participant");
+  const winnerId = String(first[0]!.userId);
+  const winner = await User.findById(winnerId).select("name").lean();
+  const title = `Quiz winner announced: ${quiz.title}`;
+  const message = `${winner?.name ?? "The top-ranked participant"} has been confirmed as the winner of ${quiz.title}. View the published final leaderboard for the results.`;
+  if (quiz.winnerConfirmedAt) {
+    const { email } = await announceEventToRegistrants(
+      String(quiz.eventId),
+      title,
+      message,
+      false,
+    );
+    return {
+      userId: String(quiz.winnerUserId),
+      confirmedAt: quiz.winnerConfirmedAt,
+      alreadyConfirmed: true,
+      delivered: 0,
+      email,
+    };
+  }
   const updated = await Quiz.findOneAndUpdate({ _id: quizId, round3PublishedAt: { $exists: true }, winnerConfirmedAt: { $exists: false } }, { $set: { winnerUserId: first[0]!.userId, winnerConfirmedAt: new Date() } }, { new: true });
   if (!updated) return fail(409, "WINNER_CONFIRMED", "Winner was confirmed by another administrator");
-  await recordAudit(adminId, "quiz.winner.confirmed", "quiz", quizId, { userId: first[0]!.userId });
-  return { userId: first[0]!.userId, confirmedAt: updated.winnerConfirmedAt };
+  const delivery = await announceEventToRegistrants(
+    String(quiz.eventId),
+    title,
+    message,
+  );
+  await recordAudit(adminId, "quiz.winner.confirmed", "quiz", quizId, {
+    userId: winnerId,
+    delivered: delivery.delivered,
+    emailSent: delivery.email.sent,
+    emailFailed: delivery.email.failed,
+  });
+  return {
+    userId: winnerId,
+    confirmedAt: updated.winnerConfirmedAt,
+    alreadyConfirmed: false,
+    ...delivery,
+  };
 }
 
 export async function getCompetition(quizId: string, userId: string, isAdmin: boolean) {

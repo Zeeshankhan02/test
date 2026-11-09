@@ -1,9 +1,13 @@
 import mongoose, { Schema, type InferSchemaType } from "mongoose";
+import { randomInt } from "node:crypto";
+
+export const newAvatarUrl = () => `https://cataas.com/avatar/cat${randomInt(1_000_000, 2_147_483_647)}`;
 
 const userSchema = new Schema(
   {
     name: { type: String, required: true, trim: true, maxlength: 100 },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    avatar: { type: String, default: newAvatarUrl },
     passwordHash: { type: String, required: true, select: false },
     passwordResetTokenHash: { type: String, select: false },
     passwordResetExpiresAt: { type: Date, select: false },
@@ -14,6 +18,23 @@ const userSchema = new Schema(
   { timestamps: true },
 );
 userSchema.index({ passwordResetTokenHash: 1 }, { unique: true, sparse: true });
+userSchema.index({ avatar: 1 }, { unique: true, sparse: true });
+
+const authOtpSchema = new Schema(
+  {
+    _id: { type: String, required: true },
+    email: { type: String, required: true, lowercase: true, trim: true },
+    purpose: { type: String, enum: ["signup", "password_reset"], required: true },
+    codeHash: { type: String, required: true },
+    name: { type: String, trim: true, maxlength: 100 },
+    passwordHash: { type: String, select: false },
+    userId: { type: Schema.Types.ObjectId, ref: "User" },
+    attempts: { type: Number, default: 0 },
+    expiresAt: { type: Date, required: true, index: { expires: 0 } },
+    sentAt: { type: Date, required: true },
+  },
+  { timestamps: true },
+);
 
 const sessionSchema = new Schema(
   {
@@ -213,8 +234,11 @@ const certificateTemplateSchema = new Schema(
     title: { type: String, required: true },
     description: { type: String, required: true },
     eventId: { type: Schema.Types.ObjectId, ref: "Event", required: true },
+    certificateType: { type: String, enum: ["participation", "winner"], default: "participation" },
     signatureName: { type: String, required: true },
     signatureRole: { type: String, required: true },
+    logoUrl: { type: String, trim: true, maxlength: 2048 },
+    signatureImageUrl: { type: String, trim: true, maxlength: 2048 },
     status: { type: String, enum: ["draft", "published"], default: "draft" },
   },
   { timestamps: true },
@@ -232,17 +256,24 @@ const certificateSchema = new Schema(
       required: true,
     },
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
+    eventId: { type: Schema.Types.ObjectId, ref: "Event" },
     recipientName: { type: String, required: true, maxlength: 140 },
     certificateId: { type: String, required: true, unique: true },
     awardType: { type: String, enum: ["participation", "winner"], default: "participation" },
     competitionId: { type: Schema.Types.ObjectId, ref: "Quiz" },
+    rank: { type: Number, min: 1, max: 3 },
     issuedAt: { type: Date, default: Date.now },
+    publishedAt: Date,
+    staleAt: Date,
     revokedAt: Date,
   },
   { timestamps: true },
 );
-certificateSchema.index({ templateId: 1, registrationId: 1 }, { unique: true });
-certificateSchema.index({ competitionId: 1 }, { unique: true, sparse: true });
+certificateSchema.index(
+  { eventId: 1, registrationId: 1, awardType: 1, competitionId: 1 },
+  { unique: true, partialFilterExpression: { eventId: { $exists: true }, staleAt: null, revokedAt: null } },
+);
+certificateSchema.index({ competitionId: 1, registrationId: 1, rank: 1 });
 
 const auditLogSchema = new Schema(
   {
@@ -257,6 +288,7 @@ const auditLogSchema = new Schema(
 auditLogSchema.index({ createdAt: -1, action: 1 });
 
 export const User = mongoose.model("User", userSchema);
+export const AuthOtp = mongoose.model("AuthOtp", authOtpSchema);
 export const Session = mongoose.model("Session", sessionSchema);
 export const Event = mongoose.model("Event", eventSchema);
 export const Registration = mongoose.model("Registration", registrationSchema);

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { PDFDownloadLink, PDFViewer } from "@react-pdf/renderer";
 import {
   ArrowRight,
   Check,
@@ -11,11 +12,11 @@ import {
   Users,
   X,
 } from "lucide-react";
-import { api } from "./api";
-import type { ApiRegistration } from "./api";
+import { api, festDateLabel, festDurationLabel, useFestDates } from "./api";
+import type { ApiEventCertificateStatus, ApiQuiz, ApiRegistration } from "./api";
+import CertificatePdf from "./CertificatePdf";
 import { useAuth } from "./AuthContext";
 import type {
-  Certificate,
   CertificateTemplate,
   Event,
   Registration,
@@ -104,12 +105,12 @@ export function VolunteersPage({ toast }: { toast: Toast }) {
   const [statusFilter, setStatusFilter] = useState("all");
   const [createOpen, setCreateOpen] = useState(false);
   const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState("");
   const [created, setCreated] = useState<{
     volunteer: Volunteer;
     password: string;
   } | null>(null);
-  const [busy, setBusy] = useState(false);
   const [view, setView] = useState<Volunteer | null>(null);
   const loadError = !!volunteersError;
   const filtered = volunteers.filter(
@@ -407,11 +408,14 @@ export function ParticipationCertificate({
   signatureName: string;
   signatureRole: string;
 }) {
+  const festDates = useFestDates();
+  const schedule = festDateLabel(festDates);
+  const duration = festDurationLabel(festDates);
   return (
     <article className="participation-certificate bg-white text-zinc-900 border-zinc-300">
       <div className="certificate-inner">
         <span className="certificate-mark">Y</span>
-        <small>YUKTI · NORTH CAMPUS FEST 2026</small>
+        <small>{festDates?.title || "YUKTI"}{schedule ? ` · ${schedule}` : " · Dates coming soon"}{duration ? ` · ${duration}` : ""}</small>
         <h2>{title || "Certificate of Participation"}</h2>
         <span className="certificate-rule" />
         <p>This certificate is proudly presented to</p>
@@ -439,12 +443,15 @@ const blankDraft: CertificateDraft = {
   eventId: "",
   signatureName: "",
   signatureRole: "Fest Coordinator",
+  certificateType: "participation",
+  logoUrl: "",
+  signatureImageUrl: "",
 };
 function toRegistration(row: ApiRegistration): Registration {
   return {
     id: row._id,
     eventId: row.eventId,
-    userId: typeof row.userId === "string" ? row.userId : row.userId.name,
+    userId: typeof row.userId === "string" ? row.userId : row.userId?.name || "Deleted user",
     teamName: row.teamName || null,
     members: row.members,
     registeredAt: row.createdAt,
@@ -456,7 +463,9 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
   const [templates, setTemplates] = useState<CertificateTemplate[]>([]);
   const [availableEvents, setAvailableEvents] = useState<Event[]>([]);
   const [registrations, setRegistrations] = useState<Registration[]>([]);
-  const [certificates, setCertificates] = useState<Certificate[]>([]);
+  const [certificateStatus, setCertificateStatus] = useState<ApiEventCertificateStatus | null>(null);
+  const [previewRecord, setPreviewRecord] = useState<ApiEventCertificateStatus["certificates"][number] | null>(null);
+  const [quizzes, setQuizzes] = useState<ApiQuiz[]>([]);
   const [draft, setDraft] = useState<CertificateDraft>({ ...blankDraft });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [registrationId, setRegistrationId] = useState("");
@@ -464,10 +473,12 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
   const [preview, setPreview] = useState(false);
   const [previewPublished, setPreviewPublished] = useState(false);
   const [publishConfirm, setPublishConfirm] = useState(false);
+  const [winnerCompetitionId, setWinnerCompetitionId] = useState("");
   const [loading, setLoading] = useState(true);
+  const festDates = useFestDates();
   useEffect(() => {
-    void Promise.all([api.certificateTemplates(), api.events()])
-      .then(async ([rows, eventRows]) => {
+    void Promise.all([api.certificateTemplates(), api.events(), api.quizzes()])
+      .then(async ([rows, eventRows, quizRows]) => {
         const registrationRows = (
           await Promise.all(
             eventRows.map((event) => api.eventRegistrations(event.id)),
@@ -481,6 +492,9 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
             eventId: row.eventId,
             signatureName: row.signatureName,
             signatureRole: row.signatureRole,
+            certificateType: row.certificateType ?? "participation",
+            logoUrl: row.logoUrl || "",
+            signatureImageUrl: row.signatureImageUrl || "",
             status: row.status,
             createdAt: row.createdAt,
             recipientCount: 0,
@@ -488,6 +502,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
         );
         setAvailableEvents(eventRows);
         setRegistrations(registrationRows.map(toRegistration));
+        setQuizzes(quizRows);
         setRegistrationId(registrationRows[0]?._id || "");
         if (eventRows[0])
           setDraft((current) =>
@@ -505,10 +520,19 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
       )
       .finally(() => setLoading(false));
   }, []);
+  useEffect(() => {
+    if (!draft.eventId) { setCertificateStatus(null); return; }
+    let current = true;
+    void api.eventCertificates(draft.eventId)
+      .then((status) => { if (current) setCertificateStatus(status); })
+      .catch((cause: unknown) => { if (current) toast(cause instanceof Error ? cause.message : "Could not load certificate status."); });
+    return () => { current = false; };
+  }, [draft.eventId]);
   const event = availableEvents.find((item) => item.id === draft.eventId);
   const eligible = registrations.filter(
     (item) => item.eventId === draft.eventId && item.status === "confirmed",
   );
+  const eventQuizzes = quizzes.filter((quiz) => quiz.eventId === draft.eventId);
   const selectedRegistration =
     eligible.find((item) => item.id === registrationId) || eligible[0];
   const validate = () => {
@@ -518,6 +542,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
     if (!draft.eventId) next.push("Choose an event.");
     if (!draft.signatureName.trim()) next.push("Add a signature name.");
     if (!draft.signatureRole.trim()) next.push("Add a signature role.");
+    if (draft.certificateType === "winner" && !winnerCompetitionId) next.push("Choose published final-round results.");
     setErrors(next);
     return next.length === 0;
   };
@@ -567,6 +592,9 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
       eventId: template.eventId,
       signatureName: template.signatureName,
       signatureRole: template.signatureRole,
+      certificateType: template.certificateType ?? "participation",
+      logoUrl: template.logoUrl || "",
+      signatureImageUrl: template.signatureImageUrl || "",
     });
     setEditingId(template.id);
     setRegistrationId(
@@ -579,22 +607,48 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
     if (!validate()) return;
     setPublishConfirm(true);
   };
+  const generatedForTemplate = (certificateStatus?.certificates || []).filter((row) =>
+    editingId && (typeof row.templateId === "string" ? row.templateId : row.templateId?._id) === editingId &&
+    row.awardType === (draft.certificateType || "participation") && !row.publishedAt && !row.staleAt && !row.revokedAt,
+  ).length;
   const publish = async () => {
     const existing = templates.find((item) => item.id === editingId);
     try {
-      const saved = editingId
-        ? await api.updateCertificateTemplate(editingId, draft)
-        : await api.createCertificateTemplate(draft);
-      const result = await api.publishCertificates(saved._id);
-      const templateId = saved._id;
+      const competitionId = draft.certificateType === "winner" ? winnerCompetitionId : undefined;
+      if (generatedForTemplate === 0) {
+        const saved = editingId
+          ? await api.updateCertificateTemplate(editingId, draft)
+          : await api.createCertificateTemplate(draft);
+        const generated = await api.generateEventCertificates(draft.eventId, {
+          templateId: saved._id,
+          certificateType: draft.certificateType || "participation",
+          ...(competitionId ? { competitionId } : {}),
+        });
+        if (!generated.total) throw new Error("No eligible recipients found.");
+        setEditingId(saved._id);
+        setTemplates((current) => current.some((item) => item.id === saved._id)
+          ? current.map((item) => item.id === saved._id ? { ...item, ...draft } : item)
+          : [{ id: saved._id, ...draft, status: "draft", createdAt: saved.createdAt, recipientCount: 0 }, ...current]);
+        await api.eventCertificates(draft.eventId).then(setCertificateStatus);
+        setPublishConfirm(false);
+        toast(`Generated ${generated.total} certificates. Review the records before publishing.`);
+        return;
+      }
+      if (!editingId) throw new Error("Save this template before publishing generated certificates.");
+      const result = await api.publishEventCertificates(draft.eventId, {
+        certificateType: draft.certificateType || "participation",
+        ...(competitionId ? { competitionId } : {}),
+      });
+      const templateId = editingId;
+      if (!templateId) throw new Error("Certificate template not found.");
       const template: CertificateTemplate = {
         id: templateId,
         ...draft,
         status: "published",
-        createdAt: saved.createdAt,
+        createdAt: existing?.createdAt || new Date().toISOString(),
         recipientCount: result.published,
       };
-      setCertificates([]);
+      await api.eventCertificates(draft.eventId).then(setCertificateStatus);
       setTemplates((current) =>
         existing
           ? current.map((item) => (item.id === templateId ? template : item))
@@ -603,7 +657,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
       setEditingId(templateId);
       setPublishConfirm(false);
       setErrors([]);
-      toast(`Certificates published for ${result.published} registrations`);
+      toast(`Published ${result.published} certificates`);
     } catch (error) {
       setErrors([
         error instanceof Error
@@ -616,7 +670,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
   const update = <K extends keyof CertificateDraft>(
     key: K,
     value: CertificateDraft[K],
-  ) => setDraft((current) => ({ ...current, [key]: value }));
+  ) => { setDraft((current) => ({ ...current, [key]: value })); };
   return (
     <>
       <div className="certificates-title">
@@ -647,6 +701,14 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
             </span>
           </div>
           <label className="field-label">
+            CERTIFICATE CATEGORY
+            <select value={draft.certificateType || "participation"} onChange={(event) => { update("certificateType", event.target.value as "participation" | "winner"); setWinnerCompetitionId(""); }}>
+              <option value="participation">Participation</option><option value="winner">Achievement / Winner</option>
+            </select>
+          </label>
+          {draft.certificateType === "winner" && <label className="field-label">PUBLISHED FINAL ROUND<select value={winnerCompetitionId} onChange={(e) => setWinnerCompetitionId(e.target.value)}><option value="">Choose published results</option>{eventQuizzes.filter((quiz) => quiz.round3PublishedAt).map((quiz) => <option key={quiz._id} value={quiz._id}>{quiz.title}</option>)}</select></label>}
+          <div className="certificate-form-row"><label className="field-label">FEST LOGO URL<input value={draft.logoUrl || ""} onChange={(event) => update("logoUrl", event.target.value)} placeholder="https://…" /></label><label className="field-label">SIGNATURE IMAGE URL<input value={draft.signatureImageUrl || ""} onChange={(event) => update("signatureImageUrl", event.target.value)} placeholder="https://…" /></label></div>
+          <label className="field-label">
             CERTIFICATE TITLE
             <input
               value={draft.title}
@@ -669,6 +731,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
               value={draft.eventId}
               onChange={(event) => {
                 update("eventId", event.target.value);
+                setWinnerCompetitionId("");
                 setRegistrationId(
                   registrations.find(
                     (item) => item.eventId === event.target.value,
@@ -705,7 +768,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
               />
             </label>
           </div>
-          <label className="field-label">
+          {draft.certificateType !== "winner" && <label className="field-label">
             PREVIEW RECIPIENT
             <select
               value={selectedRegistration?.id || ""}
@@ -722,7 +785,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
                 </option>
               ))}
             </select>
-          </label>
+          </label>}
           {errors.length > 0 && (
             <ul className="certificate-errors" role="alert">
               {errors.map((error) => (
@@ -743,8 +806,8 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
             <button className="btn btn-outline" onClick={saveDraft}>
               Save draft
             </button>
-            <button className="btn btn-dark" onClick={doPublish}>
-              Publish certificates <ArrowRight size={15} />
+            <button className="btn btn-dark" disabled={templates.find((item) => item.id === editingId)?.status === "published"} onClick={doPublish}>
+              {generatedForTemplate ? "Publish generated certificates" : "Generate certificates"} <ArrowRight size={15} />
             </button>
           </div>
         </section>
@@ -777,7 +840,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
             <span className="section-kicker">MANAGE CERTIFICATES</span>
             <h2>Certificate templates</h2>
           </div>
-          <span>{certificates.length} published certificates</span>
+          <span>{certificateStatus?.certificates.length ?? 0} certificates · {certificateStatus?.eligibleParticipants ?? 0} checked in · {certificateStatus?.eligibleWinners ?? 0} finalists</span>
         </div>
         {loading ? (
           <div className="volunteer-loading">
@@ -849,6 +912,11 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
           </div>
         )}
       </section>
+      <section className="certificate-list">
+        <div className="certificate-list-heading"><div><span className="section-kicker">ISSUED RECORDS</span><h2>Event certificates</h2></div><span>{certificateStatus?.certificates.length ?? 0} records</span></div>
+        {(certificateStatus?.certificates || []).length === 0 ? <p>No certificates generated for this event yet.</p> : <div className="certificate-table"><div className="certificate-row certificate-head"><span>RECIPIENT</span><span>CATEGORY</span><span>RANK</span><span>CERTIFICATE ID</span><span>STATUS</span></div>{(certificateStatus?.certificates || []).map((certificate) => { const template = typeof certificate.templateId === "object" ? certificate.templateId : null; const document = <CertificatePdf certificate={{ ...certificate, ...(template || {}) }} eventName={certificateStatus?.event.title || "Fest Event"} eventDate={certificateStatus?.event.endsAt} festName={festDates?.title || "YUKTI"} verificationUrl={`${window.location.origin}/certificate/verify/${certificate.certificateId}`} />; return <div className="certificate-row" key={certificate._id}><b>{certificate.recipientName}</b><span>{certificate.awardType === "winner" ? "Achievement" : "Participation"}</span><span>{certificate.rank ? `#${certificate.rank}` : "—"}</span><span><button className="text-link" onClick={() => setPreviewRecord(certificate)}>{certificate.certificateId} · Preview</button> <PDFDownloadLink className="text-link" document={document} fileName={`${certificate.certificateId}.pdf`}>{({ loading, error }) => error ? "PDF error" : loading ? "Preparing…" : "Download"}</PDFDownloadLink></span><span>{certificate.staleAt || certificate.revokedAt ? "Stale / revoked" : certificate.publishedAt || (!certificate.eventId && template?.status === "published") ? "Published" : "Generated"}</span></div>; })}</div>}
+      </section>
+      {previewRecord && <AdminDialog title={`Certificate ${previewRecord.certificateId}`} close={() => setPreviewRecord(null)}><PDFViewer style={{ width: "min(80vw, 900px)", height: "70vh" }}><CertificatePdf certificate={{ ...previewRecord, ...(typeof previewRecord.templateId === "object" ? previewRecord.templateId : {}) }} eventName={certificateStatus?.event.title || "Fest Event"} eventDate={certificateStatus?.event.endsAt} festName={festDates?.title || "YUKTI"} verificationUrl={`${window.location.origin}/certificate/verify/${previewRecord.certificateId}`} /></PDFViewer></AdminDialog>}
       {preview && (
         <AdminDialog
           title={
@@ -895,15 +963,10 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
       )}
       {publishConfirm && (
         <AdminDialog
-          title="Publish certificates?"
+          title={generatedForTemplate ? "Publish generated certificates?" : "Generate certificates?"}
           close={() => setPublishConfirm(false)}
         >
-          <p className="publish-copy">
-            This will publish certificates for{" "}
-            <b>{eligible.length} registrations</b> from <b>{event?.title}</b>.
-            Team registrations receive one certificate using the team name; solo
-            registrations use the participant name.
-          </p>
+          <p className="publish-copy">{generatedForTemplate ? <>This will publish <b>{generatedForTemplate} reviewed certificates</b> for <b>{event?.title}</b>. Students can view them immediately.</> : <>Generate certificates for <b>{draft.certificateType === "winner" ? eventQuizzes.find((quiz) => quiz._id === winnerCompetitionId)?.title || "the chosen final results" : `${certificateStatus?.eligibleParticipants ?? 0} checked-in participants`}</b> from <b>{event?.title}</b>. Review the generated records before publishing.</>}</p>
           <div className="modal-actions">
             <button
               className="btn btn-outline"
@@ -912,7 +975,7 @@ export function CertificatesPage({ toast }: { toast: Toast }) {
               Cancel
             </button>
             <button className="btn btn-dark" onClick={publish}>
-              Publish certificates
+              {generatedForTemplate ? "Publish certificates" : "Generate certificates"}
             </button>
           </div>
         </AdminDialog>

@@ -17,7 +17,8 @@ export const listVolunteers = asyncRoute(async (_req, res) =>
 
 export const createVolunteer = asyncRoute(async (req, res) => {
   const input = parseBody(volunteerCreateSchema, req.body);
-  return success(res, await addVolunteer(req.principal!.id, input), 201);
+  const { password, ...volunteer } = await addVolunteer(req.principal!.id, input);
+  return success(res, { volunteer, password }, 201);
 });
 
 export const updateVolunteerStatus = asyncRoute(async (req, res) => {

@@ -46,23 +46,25 @@ function withCredential(row: TicketCredentialRecord) {
 }
 
 export async function listTicketsForUser(userId: string) {
-  // Only confirmed registrations should have active participant tickets.
+  // Keep cancelled registrations visible so students retain ticket history.
   const registrations = await Registration.find({
     $or: [{ userId }, { memberIds: userId }],
-    status: "confirmed",
   })
-    .select("_id")
+    .select("_id status")
     .lean();
 
   const registrationIds = registrations.map((registration) => registration._id);
+  const activeRegistrations = registrations.filter(
+    (registration) => registration.status === "confirmed",
+  );
 
   // Repair registrations created before ticket creation was working, or records
   // left without a ticket by an earlier incomplete deployment.
   const existingRegistrationIds = await Ticket.distinct("registrationId", {
-    registrationId: { $in: registrationIds },
+    registrationId: { $in: activeRegistrations.map((row) => row._id) },
   });
   const existingIds = new Set(existingRegistrationIds.map((id) => String(id)));
-  const registrationsMissingTickets = registrations.filter(
+  const registrationsMissingTickets = activeRegistrations.filter(
     (registration) => !existingIds.has(String(registration._id)),
   );
 
@@ -93,6 +95,18 @@ export async function listTicketsForUser(userId: string) {
     registrationId: { $in: registrationIds },
   })
     .select(credentialSelection)
+    .populate({
+      path: "registrationId",
+      select: "eventId status userId teamName members createdAt",
+      populate: [
+        {
+          path: "eventId",
+          select:
+            "title description category venue startsAt endsAt status capacity registeredCount image imagePublicId participationType teamMin teamMax teamLeaderIncluded",
+        },
+        { path: "userId", select: "name email" },
+      ],
+    })
     .sort({ createdAt: -1 })
     .lean();
 
@@ -122,11 +136,62 @@ export async function listTicketsForUser(userId: string) {
       credentialCiphertext: _ciphertext,
       credentialIv: _iv,
       credentialTag: _tag,
+      registrationId: rawRegistration,
       ...safeTicket
     } = row;
+    const registration =
+      rawRegistration && typeof rawRegistration === "object"
+        ? (rawRegistration as Record<string, unknown>)
+        : null;
+    const event =
+      registration?.eventId && typeof registration.eventId === "object"
+        ? (registration.eventId as Record<string, unknown>)
+        : null;
+    const participant =
+      registration?.userId && typeof registration.userId === "object"
+        ? (registration.userId as Record<string, unknown>)
+        : registration?.userId;
 
     return {
       ...safeTicket,
+      registrationId: registration ? String(registration._id) : String(rawRegistration),
+      registration: registration
+        ? {
+            _id: String(registration._id),
+            eventId: event ? String(event._id) : "",
+            userId:
+              participant && typeof participant === "object"
+                ? {
+                    name: String((participant as Record<string, unknown>).name || "Participant"),
+                    email: String((participant as Record<string, unknown>).email || ""),
+                  }
+                : String(participant || ""),
+            teamName: registration.teamName ? String(registration.teamName) : undefined,
+            members: Array.isArray(registration.members) ? registration.members : [],
+            createdAt: registration.createdAt,
+            status: String(registration.status || "cancelled"),
+          }
+        : null,
+      event: event
+        ? {
+            _id: String(event._id),
+            title: String(event.title || "Event"),
+            description: String(event.description || ""),
+            category: String(event.category || ""),
+            venue: String(event.venue || ""),
+            startsAt: event.startsAt,
+            endsAt: event.endsAt,
+            status: String(event.status || "archived"),
+            capacity: event.capacity,
+            registeredCount: event.registeredCount,
+            image: event.image,
+            imagePublicId: event.imagePublicId,
+            participationType: event.participationType,
+            teamMin: event.teamMin,
+            teamMax: event.teamMax,
+            teamLeaderIncluded: event.teamLeaderIncluded,
+          }
+        : null,
       credential: makeCredential(credentialId, env.JWT_REFRESH_SECRET),
     };
   });

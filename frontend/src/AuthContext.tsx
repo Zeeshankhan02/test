@@ -20,7 +20,8 @@ type AuthValue = {
   reloadVolunteers: () => void;
   login: (role: Role, email: string, password: string) => Promise<boolean>;
   logout: () => Promise<void>;
-  signupStudent: (email: string, password: string) => Promise<User>;
+  signupStudent: (email: string, password: string) => Promise<void>;
+  verifyStudentSignup: (email: string, otp: string) => Promise<User>;
   createVolunteer: (email: string) => Promise<VolunteerCreated>;
   setVolunteerStatus: (
     id: string,
@@ -59,7 +60,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           session
             ? {
                 ...session.user,
-                avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(session.user.email)}`,
+                avatar: session.user.avatar || `https://i.pravatar.cc/150?u=${encodeURIComponent(session.user.email)}`,
               }
             : null,
         );
@@ -101,13 +102,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .split("@")[0]
         .replace(/[._-]+/g, " ")
         .replace(/\b\w/g, (letter) => letter.toUpperCase()) || "Student";
-    const signedUp = await api.signup(name, email.trim(), password);
+    await api.requestSignupOtp(name, email.trim(), password);
+  };
+  const verifyStudentSignup = async (email: string, otp: string) => {
+    const signedUp = await api.verifySignupOtp(email.trim(), otp);
     setUser(signedUp);
     return signedUp;
   };
   const createVolunteer = async (email: string) => {
-    const password = `${crypto.randomUUID()}${crypto.randomUUID().slice(0, 4)}`;
-    const created = await api.createVolunteer(email, password);
+    const created = await api.createVolunteer(email);
     setVolunteers((current) => [created.volunteer, ...current]);
     return created;
   };
@@ -134,6 +137,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         login,
         logout,
         signupStudent,
+        verifyStudentSignup,
         createVolunteer,
         setVolunteerStatus,
       }}

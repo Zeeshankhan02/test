@@ -2,10 +2,12 @@ import { Router } from "express";
 import { allow } from "../../middleware/authorize.middleware.js";
 import {
   downloadMyCertificate,
+  generateEventCertificateBatch,
+  getEventCertificates,
   getMyCertificates,
   listCertificateTemplates,
   publishCertificates,
-  publishWinnerCertificate,
+  publishEventCertificateBatch,
   revokeCertificate,
   updateCertificateTemplate,
   verifyCertificate,
@@ -28,8 +30,10 @@ certificatesRoutes.patch(
   allow("admin"),
   updateCertificateTemplate,
 );
+certificatesRoutes.get("/certificates/events/:eventId", allow("admin"), getEventCertificates);
+certificatesRoutes.post("/certificates/events/:eventId/generate", allow("admin"), generateEventCertificateBatch);
+certificatesRoutes.post("/certificates/events/:eventId/publish", allow("admin"), publishEventCertificateBatch);
 certificatesRoutes.post("/certificates/publish", allow("admin"), publishCertificates);
-certificatesRoutes.post("/certificates/competitions/:quizId/winner", allow("admin"), publishWinnerCertificate);
 certificatesRoutes.get("/certificates/me", getMyCertificates);
 // Real PDF download; the service verifies recipient ownership + status.
 certificatesRoutes.get("/certificates/:certificateId/download", downloadMyCertificate);

@@ -39,7 +39,8 @@ try {
   assert.equal((await fetch(`${origin}/api/v1/quizzes`)).status, 401);
   assert.ok(authResponse.headers.get("x-request-id"));
   assert.equal(authResponse.headers.get("ratelimit-limit"), null);
-  const validationResponse = await fetch(`${origin}/api/v1/auth/signup`, {
+  const signupOtpPath = `${origin}/api/v1/auth/signup/request-otp`;
+  const validationResponse = await fetch(signupOtpPath, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
@@ -59,12 +60,12 @@ try {
   assert.equal(resetResponse.status, 200);
   assert.match(
     (await resetResponse.json()).data.message,
-    /email delivery is configured/,
+    /password reset code has been sent/,
   );
   for (let request = 0; request < 12; request += 1) {
     assert.equal(
       (
-        await fetch(`${origin}/api/v1/auth/signup`, {
+        await fetch(signupOtpPath, {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({}),
@@ -73,7 +74,7 @@ try {
       400,
     );
   }
-  const additionalResponse = await fetch(`${origin}/api/v1/auth/signup`, {
+  const additionalResponse = await fetch(signupOtpPath, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),

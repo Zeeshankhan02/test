@@ -4,21 +4,23 @@ import { io } from "socket.io-client";
 
 /** Shared hook: fetch the configured fest dates once per app load. */
 let festDatesCache: ApiFestDates | null | undefined;
+const festDatesListeners = new Set<(dates: ApiFestDates | null) => void>();
+function setFestDatesCache(dates: ApiFestDates | null) {
+  festDatesCache = dates;
+  festDatesListeners.forEach((listener) => listener(dates));
+}
 export function useFestDates(): ApiFestDates | null {
   const [dates, setDates] = useState<ApiFestDates | null>(
     festDatesCache ?? null
   );
   useEffect(() => {
-    if (festDatesCache !== undefined) return;
+    festDatesListeners.add(setDates);
+    if (festDatesCache !== undefined) return () => { festDatesListeners.delete(setDates); };
     void api
       .festDates()
-      .then((value) => {
-        festDatesCache = value;
-        setDates(value);
-      })
-      .catch(() => {
-        festDatesCache = null;
-      });
+      .then(setFestDatesCache)
+      .catch(() => setFestDatesCache(null));
+    return () => { festDatesListeners.delete(setDates); };
   }, []);
   return dates;
 }
@@ -41,18 +43,35 @@ export function daysUntil(iso: string): string {
 /** "OCT 15 — 17, 2026" style label, or null when nothing is configured. */
 export function festDateLabel(dates: ApiFestDates | null): string | null {
   if (!dates?.startsAt || !dates?.endsAt) return null;
-  const start = new Date(dates.startsAt);
-  const end = new Date(dates.endsAt);
-  const month = start.toLocaleString("en", { month: "short" }).toUpperCase();
-  if (
-    start.getFullYear() === end.getFullYear() &&
-    start.getMonth() === end.getMonth()
-  ) {
-    return `${month} ${start.getDate()} — ${end.getDate()}, ${end.getFullYear()}`;
-  }
-  return `${month} ${start.getDate()} — ${end
-    .toLocaleString("en", { month: "short" })
-    .toUpperCase()} ${end.getDate()}, ${end.getFullYear()}`;
+  const parts = (value: string): Record<string, string> => Object.fromEntries(
+    new Intl.DateTimeFormat("en", {
+      timeZone: dates.timezone || undefined,
+      month: "short", day: "numeric", year: "numeric",
+    }).formatToParts(new Date(value)).map(({ type, value: part }) => [type, part]),
+  );
+  const start = parts(dates.startsAt);
+  const end = parts(dates.endsAt);
+  const startMonth = start.month.toUpperCase();
+  const endMonth = end.month.toUpperCase();
+  return startMonth === endMonth && start.year === end.year
+    ? `${startMonth} ${start.day} — ${end.day}, ${end.year}`
+    : `${startMonth} ${start.day} — ${endMonth} ${end.day}, ${end.year}`;
+}
+
+export function festDurationLabel(dates: ApiFestDates | null): string | null {
+  if (!dates?.startsAt || !dates?.endsAt) return null;
+  const parts = (value: string): Record<string, number> => Object.fromEntries(
+    new Intl.DateTimeFormat("en", {
+      timeZone: dates.timezone || undefined,
+      year: "numeric", month: "numeric", day: "numeric",
+    }).formatToParts(new Date(value)).map(({ type, value: part }) => [type, Number(part)]),
+  );
+  const start = parts(dates.startsAt);
+  const end = parts(dates.endsAt);
+  const startDay = Date.UTC(start.year, start.month - 1, start.day);
+  const endDay = Date.UTC(end.year, end.month - 1, end.day);
+  const days = Math.floor((endDay - startDay) / 86_400_000) + 1;
+  return `${days} ${days === 1 ? "day" : "days"}`;
 }
 
 const baseUrl = (
@@ -64,7 +83,7 @@ let refreshPromise: Promise<{
   user: ApiUser;
 } | null> | null = null;
 
-type ApiUser = { id: string; name: string; email: string; role: Role };
+type ApiUser = { id: string; name: string; email: string; role: Role; avatar?: string };
 type ApiEvent = {
   _id: string;
   title: string;
@@ -89,7 +108,7 @@ type Envelope<T> = { success: true; data: T };
 function toUser(user: ApiUser): User {
   return {
     ...user,
-    avatar: `https://i.pravatar.cc/150?u=${encodeURIComponent(user.email)}`,
+    avatar: user.avatar || `https://i.pravatar.cc/150?u=${encodeURIComponent(user.email)}`,
   };
 }
 
@@ -181,10 +200,15 @@ export const api = {
     accessToken = session.accessToken;
     return toUser(session.user);
   },
-  async signup(name: string, email: string, password: string) {
+  requestSignupOtp: (name: string, email: string, password: string) =>
+    request<{ message: string }>(
+      "/auth/signup/request-otp",
+      json("POST", { name, email, password }),
+    ),
+  async verifySignupOtp(email: string, otp: string) {
     const session = await raw<{ accessToken: string; user: ApiUser }>(
-      "/auth/signup",
-      json("POST", { name, email, password })
+      "/auth/signup/verify-otp",
+      json("POST", { email, otp }),
     );
     accessToken = session.accessToken;
     return toUser(session.user);
@@ -208,10 +232,10 @@ export const api = {
       "/auth/password/forgot",
       json("POST", { email })
     ),
-  resetPassword: (token: string, password: string) =>
+  resetPassword: (email: string, otp: string, password: string) =>
     request<{ changed: boolean }>(
       "/auth/password/reset",
-      json("POST", { token, password })
+      json("POST", { email, otp, password })
     ),
   events: async (
     filters: { q?: string; category?: string; limit?: number } = {}
@@ -268,28 +292,12 @@ export const api = {
   eventRegistrations: (eventId: string) =>
     request<ApiRegistration[]>(`/events/${eventId}/registrations`),
   tickets: () => request<ApiTicket[]>("/tickets/me"),
-  myTicketDetails: async () => {
-    const [tickets, registrations] = await Promise.all([
-      request<ApiTicket[]>("/tickets/me"),
-      request<ApiRegistration[]>("/registrations/me"),
-    ]);
-    const byId = new Map(
-      registrations.map((registration) => [registration._id, registration])
-    );
-    return Promise.all(
-      tickets.map(async (ticket) => {
-        const registration = byId.get(ticket.registrationId);
-        if (!registration) return null;
-        return {
-          ticket,
-          registration,
-          event: await api.event(registration.eventId),
-        };
-      })
-    ).then((rows) =>
-      rows.filter((row): row is NonNullable<typeof row> => row !== null)
-    );
-  },
+  myTicketDetails: async () =>
+    (await request<ApiTicket[]>("/tickets/me")).map((ticket) => ({
+      ticket,
+      registration: ticket.registration,
+      event: ticket.event ? toEvent(ticket.event) : null,
+    })),
   cancelRegistration: (id: string) =>
     request(`/registrations/${id}/cancel`, json("POST")),
   verifyTicket: (credential: string) =>
@@ -334,12 +342,12 @@ export const api = {
     }>("/volunteers/me/summary"),
   volunteers: async () =>
     (await request<ApiVolunteer[]>("/volunteers")).map(toVolunteer),
-  createVolunteer: async (email: string, password: string) => {
-    const volunteer = await request<ApiVolunteer>(
+  createVolunteer: async (email: string) => {
+    const created = await request<{ volunteer: ApiVolunteer; password: string }>(
       "/volunteers",
-      json("POST", { email, name: displayName(email), password })
+      json("POST", { email, name: displayName(email) })
     );
-    return { volunteer: toVolunteer(volunteer), password };
+    return { volunteer: toVolunteer(created.volunteer), password: created.password };
   },
   setVolunteerStatus: (id: string, status: Volunteer["status"]) =>
     request(
@@ -380,7 +388,7 @@ export const api = {
     message: string,
     audience: "students" | "volunteers" | "all"
   ) =>
-    request<{ delivered: number }>(
+    request<{ delivered: number; email: { sent: number; failed: number } }>(
       "/notifications",
       json("POST", { title, message, audience })
     ),
@@ -401,8 +409,14 @@ export const api = {
     );
   },
   festDates: () => request<ApiFestDates | null>("/fest/dates"),
-  saveFestDates: (value: FestDatesDraft) =>
-    request<ApiFestDates>("/fest/dates", json("PUT", value)),
+  saveFestDates: async (value: FestDatesDraft) => {
+    const dates = await request<ApiFestDates>("/fest/dates", json("PUT", {
+      ...value,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    }));
+    setFestDatesCache(dates);
+    return dates;
+  },
   quizzes: () => request<ApiQuiz[]>("/quizzes"),
   createQuiz: (value: {
     eventId: string;
@@ -438,14 +452,22 @@ export const api = {
       json("POST")
     ),
   announceQuizResults: (id: string) =>
-    request<{ delivered: number; alreadyAnnounced: boolean }>(
+    request<{
+      delivered: number;
+      alreadyAnnounced: boolean;
+      email: { sent: number; failed: number };
+    }>(
       `/quizzes/${id}/results/announce`,
       json("POST")
     ),
   competition: (id: string) => request<ApiCompetition>(`/quizzes/${id}/competition`),
   competitionProgress: (id: string) => request<ApiCompetitionProgress>(`/quizzes/${id}/competition`),
   prepareQualification: (id: string) => request<ApiCompetitionRow[]>(`/quizzes/${id}/competition/qualification/prepare`, json("POST")),
-  publishQualification: (id: string, userIds: string[], reason?: string) => request<ApiCompetitionRow[]>(`/quizzes/${id}/competition/qualification/publish`, json("POST", { userIds, ...(reason ? { reason } : {}) })),
+  publishQualification: (id: string, userIds: string[], reason?: string) => request<{
+    participants: ApiCompetitionRow[];
+    delivered: number;
+    email: { sent: number; failed: number };
+  }>(`/quizzes/${id}/competition/qualification/publish`, json("POST", { userIds, ...(reason ? { reason } : {}) })),
   correctQualification: (id: string, userIds: string[], reason: string) => request<ApiCompetitionRow[]>(`/quizzes/${id}/competition/qualification/correct`, json("POST", { userIds, reason })),
   saveRound2: (id: string, rankings: ApiCompetitionRank[], advancementLimit: number) => request<ApiCompetitionRank[]>(`/quizzes/${id}/competition/round-2`, json("PUT", { rankings, advancementLimit })),
   publishRound2: (id: string) => request<unknown>(`/quizzes/${id}/competition/round-2/publish`, json("POST")),
@@ -453,7 +475,13 @@ export const api = {
   saveRound3: (id: string, rankings: ApiCompetitionRank[]) => request<ApiCompetitionRank[]>(`/quizzes/${id}/competition/round-3`, json("PUT", { rankings })),
   publishRound3: (id: string) => request<unknown>(`/quizzes/${id}/competition/round-3/publish`, json("POST")),
   correctRound3: (id: string, rankings: ApiCompetitionRank[], reason: string) => request<ApiCompetitionRank[]>(`/quizzes/${id}/competition/round-3/correct`, json("POST", { rankings, reason })),
-  confirmCompetitionWinner: (id: string) => request<{ userId: string; confirmedAt: string }>(`/quizzes/${id}/competition/winner/confirm`, json("POST")),
+  confirmCompetitionWinner: (id: string) => request<{
+    userId: string;
+    confirmedAt: string;
+    alreadyConfirmed: boolean;
+    delivered: number;
+    email: { sent: number; failed: number };
+  }>(`/quizzes/${id}/competition/winner/confirm`, json("POST")),
   endQuizEarly: (id: string) =>
     request<unknown>(`/quizzes/${id}/end-early`, json("POST")),
   retryQuizFinalization: (id: string) =>
@@ -465,6 +493,8 @@ export const api = {
     request<ApiQuizResult>(`/quizzes/${id}/my-result`),
   startQuiz: (id: string) =>
     request<ApiAttemptSnapshot>(`/quizzes/${id}/start`, json("POST")),
+  myQuizAttempt: (id: string) =>
+    request<ApiAttemptSnapshot | null>(`/quizzes/${id}/my-attempt`),
   attemptState: (attemptId: string) =>
     request<ApiAttemptSnapshot>(`/quiz-attempts/${attemptId}/state`),
   saveAttemptAnswer: (
@@ -478,6 +508,7 @@ export const api = {
       status: string;
       locked: boolean;
       reason?: string;
+      finalizedAt?: string;
     }>(`/quiz-attempts/${attemptId}/answers`, json("POST", { index, answer })),
   finishAttempt: (attemptId: string) =>
     request<{
@@ -495,10 +526,18 @@ export const api = {
     }>(`/quiz-attempts/${id}/submit`, json("POST", { answers })),
   leaderboard: (id: string) =>
     request<
-      { rank: number; userName: string; score: number; submittedAt: string }[]
+      { rank: number; userName: string; avatar?: string; score: number; submittedAt: string }[]
     >(`/quizzes/${id}/leaderboard`),
+  competitionLeaderboards: (id: string) =>
+    request<ApiCompetitionLeaderboards>(`/quizzes/${id}/competition/leaderboards`),
   certificateTemplates: () =>
     request<ApiCertificateTemplate[]>("/certificates/templates"),
+  eventCertificates: (eventId: string) =>
+    request<ApiEventCertificateStatus>(`/certificates/events/${eventId}`),
+  generateEventCertificates: (eventId: string, input: { templateId: string; certificateType: "participation" | "winner"; competitionId?: string }) =>
+    request<{ generated: number; total: number }>(`/certificates/events/${eventId}/generate`, json("POST", input)),
+  publishEventCertificates: (eventId: string, input: { certificateType: "participation" | "winner"; competitionId?: string }) =>
+    request<{ published: number; publishedAt: string }>(`/certificates/events/${eventId}/publish`, json("POST", input)),
   createCertificateTemplate: (
     value: Omit<ApiCertificateTemplate, "_id" | "status" | "createdAt">
   ) =>
@@ -524,8 +563,16 @@ export const api = {
   verifyCertificate: (certificateId: string) =>
     request<{
       certificateId: string;
-      issuedAt: string;
-      template: { _id: string; title: string; eventId: string };
+      issuedAt?: string;
+      published: boolean;
+      valid: boolean;
+      status: "valid" | "unpublished" | "revoked";
+      recipientName?: string;
+      eventName?: string;
+      certificateType?: "participation" | "winner";
+      rank?: number | null;
+      awardPosition?: string | null;
+      template?: { title: string };
     }>(`/certificates/verify/${encodeURIComponent(certificateId)}`),
   /** Downloads a real PDF (ownership + publication enforced server-side). */
   downloadCertificate: async (certificateDocId: string) => {
@@ -569,7 +616,7 @@ export type EventDraft = {
 export type ApiRegistration = {
   _id: string;
   eventId: string;
-  userId: string | { name: string; email: string };
+  userId: string | { name: string; email: string } | null;
   teamName?: string;
   members: string[];
   createdAt: string;
@@ -664,6 +711,26 @@ export type ApiCompetitionProgress = {
   isWinner: boolean;
   winnerCertificate: { id: string; certificateId: string } | null;
 };
+export type ApiCompetitionLeaderboards = {
+  quiz: { id: string; title: string };
+  round1: { published: boolean; publishedAt: string | null; rankings: ApiLeaderboardRank[] };
+  round2: { published: boolean; publishedAt: string | null; rankings: ApiLeaderboardRank[] };
+  final: {
+    published: boolean;
+    publishedAt: string | null;
+    rankings: ApiLeaderboardRank[];
+    winner: { userId: string; userName: string; confirmedAt: string } | null;
+  };
+};
+export type ApiLeaderboardRank = {
+  rank: number;
+  userId: string;
+  userName: string;
+  avatar?: string;
+  score: number | null;
+  submittedAt?: string | null;
+  notes?: string;
+};
 export type ApiAttemptSnapshot = {
   attemptId: string;
   /** Only present on the initial start/resume payload. */
@@ -698,8 +765,27 @@ export type ApiCertificate = {
         eventId: string;
         signatureName?: string;
         signatureRole?: string;
+        certificateType?: "participation" | "winner";
+        logoUrl?: string;
+        signatureImageUrl?: string;
+        status?: "draft" | "published";
       };
+  eventId?: string | { _id: string; title: string; startsAt?: string; endsAt?: string };
+  recipientName: string;
+  awardType?: "participation" | "winner";
+  rank?: number;
+  publishedAt?: string;
+  staleAt?: string;
+  revokedAt?: string;
   issuedAt: string;
+};
+export type ApiEventCertificateStatus = {
+  event: { id: string; title: string; status: string; endsAt: string };
+  eligibleParticipants: number;
+  eligibleWinners: number;
+  generated: number;
+  published: number;
+  certificates: ApiCertificate[];
 };
 export type ApiDashboard = {
   students: number;
@@ -728,6 +814,8 @@ export type ApiTicket = {
   registrationId: string;
   status: string;
   credential: string;
+  registration: ApiRegistration | null;
+  event: ApiEvent | null;
 };
 type ApiScan = {
   _id: string;
@@ -766,10 +854,14 @@ export type ApiQuiz = {
   title: string;
   durationSeconds: number;
   status: "draft" | "published" | "closed";
+  eventStartsAt: string | null;
+  eventEndsAt: string | null;
+  eventStatus: "draft" | "published" | "cancelled" | "archived" | null;
   /** Window end for published quizzes (per-quiz or fest-wide). */
   endsAt?: string | null;
   /** Set once admin publishes results; scores stay hidden before this. */
   resultsPublishedAt?: string | null;
+  round3PublishedAt?: string | null;
   questions: {
     id: string;
     text: string;
@@ -784,6 +876,9 @@ export type ApiCertificateTemplate = {
   eventId: string;
   signatureName: string;
   signatureRole: string;
+  certificateType?: "participation" | "winner";
+  logoUrl?: string;
+  signatureImageUrl?: string;
   status: "draft" | "published";
   createdAt: string;
 };
@@ -804,6 +899,8 @@ function toEvent(event: ApiEvent): Event {
     description: event.description,
     date: event.startsAt.slice(0, 10),
     time: start.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+    startsAt: event.startsAt,
+    endsAt: event.endsAt,
     venue: event.venue,
     category: event.category,
     status,

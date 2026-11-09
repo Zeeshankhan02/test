@@ -12,6 +12,8 @@ export type Event = {
   description: string;
   date: string;
   time: string;
+  startsAt?: string;
+  endsAt?: string;
   venue: string;
   category: string;
   status: "draft" | "upcoming" | "live" | "ended" | "cancelled" | "archived";
@@ -45,8 +47,11 @@ export type CertificateTemplate = {
   title: string;
   description: string;
   eventId: string;
+  certificateType?: "participation" | "winner";
   signatureName: string;
   signatureRole: string;
+  logoUrl?: string;
+  signatureImageUrl?: string;
   status: "draft" | "published";
   createdAt: string;
   recipientCount: number;

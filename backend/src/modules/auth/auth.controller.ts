@@ -4,18 +4,20 @@ import { parseBody } from "../../common/validators/object-id.js";
 import { success } from "../../common/responses/success.js";
 import {
   completePasswordReset,
-  createStudent,
   issueSession,
   login,
   requestPasswordReset,
+  requestStudentSignupOtp,
   revokeSession,
   rotateSession,
+  verifyStudentSignupOtp,
 } from "./auth.service.js";
 import {
   loginSchema,
   passwordResetRequestSchema,
   passwordResetSchema,
   signupSchema,
+  otpVerificationSchema,
 } from "./auth.validator.js";
 
 const refreshCookie = {
@@ -27,8 +29,14 @@ const refreshCookie = {
   maxAge: env.JWT_REFRESH_TTL_SECONDS * 1000,
 };
 
-export const signup = asyncRoute(async (req, res) => {
-  const user = await createStudent(parseBody(signupSchema, req.body));
+export const requestSignupOtp = asyncRoute(async (req, res) => {
+  await requestStudentSignupOtp(parseBody(signupSchema, req.body));
+  return success(res, { message: "A verification code has been sent to your email." });
+});
+
+export const verifySignupOtp = asyncRoute(async (req, res) => {
+  const { email, otp } = parseBody(otpVerificationSchema, req.body);
+  const user = await verifyStudentSignupOtp(email, otp);
   const session = await issueSession(user);
   res.cookie("refreshToken", session.refreshToken, refreshCookie);
   return success(res, { accessToken: session.accessToken, user: session.user }, 201);
@@ -57,12 +65,12 @@ export const forgotPassword = asyncRoute(async (req, res) => {
   await requestPasswordReset(email.toLowerCase());
   return success(res, {
     message:
-      "If an active account exists and email delivery is configured, password reset instructions have been sent.",
+      "If an active student or admin account exists, a password reset code has been sent.",
   });
 });
 
 export const resetPassword = asyncRoute(async (req, res) => {
-  const { token, password } = parseBody(passwordResetSchema, req.body);
-  await completePasswordReset(token, password);
+  const { email, otp, password } = parseBody(passwordResetSchema, req.body);
+  await completePasswordReset(email, otp, password);
   return success(res, { changed: true });
 });

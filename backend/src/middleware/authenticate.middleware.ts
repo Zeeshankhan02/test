@@ -10,6 +10,7 @@ export type Principal = {
   role: "student" | "volunteer" | "admin";
   name: string;
   email: string;
+  avatar?: string;
   tokenVersion: number;
 };
 
@@ -39,7 +40,7 @@ export const authenticate: RequestHandler = (req, _res, next) => {
       return fail(401, "UNAUTHORIZED", "Authentication required");
     }
     void User.findById(payload.sub)
-      .select("_id role name email active +tokenVersion")
+      .select("_id role name email avatar active +tokenVersion")
       .lean()
       .then((user) => {
         if (!user?.active || user.tokenVersion !== payload.ver) {
@@ -50,6 +51,7 @@ export const authenticate: RequestHandler = (req, _res, next) => {
           role: user.role as Principal["role"],
           name: user.name,
           email: user.email,
+          avatar: user.avatar,
           tokenVersion: user.tokenVersion,
         };
         return next();

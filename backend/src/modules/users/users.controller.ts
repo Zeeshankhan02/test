@@ -6,8 +6,8 @@ import { changePassword } from "../auth/auth.service.js";
 import { passwordChangeSchema } from "./users.validator.js";
 
 export const getCurrentUser: RequestHandler = (req, res) => {
-  const { id, role, name, email } = req.principal!;
-  return success(res, { id, role, name, email });
+  const { id, role, name, email, avatar } = req.principal!;
+  return success(res, { id, role, name, email, avatar });
 };
 
 export const updatePassword = asyncRoute(async (req, res) => {

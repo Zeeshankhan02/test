@@ -1,6 +1,6 @@
 import { fail } from "../../common/errors/app-error.js";
 import { recordAudit } from "../../common/utils/audit.js";
-import { Quiz, QuizAttempt } from "../models.js";
+import { Event, Quiz, QuizAttempt, Registration, Ticket } from "../models.js";
 import { requireQuizEventRegistration } from "../quizzes/quizzes.service.js";
 
 /**
@@ -111,23 +111,54 @@ async function ensureTiming(
 export async function beginAttempt(quizId: string, userId: string) {
   const quiz = await Quiz.findOne({ _id: quizId }).lean();
   if (!quiz || quiz.status === "draft") return fail(404, "NOT_FOUND", "Quiz not found");
+  const event = await Event.findById(quiz.eventId)
+    .select("startsAt endsAt status participationType")
+    .lean();
+  if (!event) return fail(409, "EVENT_NOT_AVAILABLE", "The event for this quiz is unavailable");
   await requireQuizEventRegistration(quiz.eventId ? String(quiz.eventId) : "", userId);
-  const attempt = await QuizAttempt.findOneAndUpdate(
+  const registration = await Registration.findOne({
+    eventId: quiz.eventId,
+    userId,
+    status: "confirmed",
+    ...(event.participationType === "both"
+      ? { $or: [{ teamName: { $exists: false } }, { teamName: "" }] }
+      : {}),
+  }).select("_id").lean();
+  if (!registration || !(await Ticket.exists({ registrationId: registration._id, status: "checked_in" })))
+    return fail(403, "TICKET_NOT_VERIFIED", "Verify your event ticket at check-in before starting the quiz.");
+  const now = new Date();
+  if (event.startsAt > now)
+    return fail(
+      409,
+      "EVENT_NOT_STARTED",
+      `You can start this quiz when the event begins (${event.startsAt.toISOString()}).`,
+    );
+  const existing = await QuizAttempt.findOne({ quizId, userId });
+  if (!existing && event.status !== "published")
+    return fail(409, "EVENT_NOT_AVAILABLE", "This event is not open for quiz attempts");
+  if (!existing && event.endsAt <= now)
+    return fail(409, "EVENT_ENDED", "This event has ended, so new quiz attempts are closed");
+  if (!existing && quiz.status !== "published")
+    return fail(409, "QUIZ_CLOSED", "This quiz is no longer accepting attempts");
+  if (!existing && quiz.endsAt && quiz.endsAt <= now)
+    return fail(409, "QUIZ_CLOSED", "The quiz window has ended, so new attempts are closed");
+  const attempt = existing ?? await QuizAttempt.findOneAndUpdate(
     { quizId, userId },
-    { $setOnInsert: { quizId, userId, startedAt: new Date() } },
+    { $setOnInsert: { quizId, userId, startedAt: now } },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
-  if (attempt.submittedAt)
-    fail(409, "ALREADY_SUBMITTED", "This quiz attempt was already submitted");
+  if (!attempt) return fail(503, "ATTEMPT_UNAVAILABLE", "Could not create or resume this quiz attempt");
+  if (attempt.submittedAt) return getAttemptState(String(attempt._id), userId);
   // An ended event (scheduled end or admin termination) is authoritative:
   // resuming must finalize, never reopen, the attempt.
-  if (quiz.status !== "published" || (quiz.endsAt && quiz.endsAt <= new Date())) {
-    const finalized = await finalizeAttempt(String(attempt._id), userId);
-    return {
-      ...finalized,
-      resumed: false,
-      endedByAdmin: Boolean(attempt.endedByAdminAt),
-    };
+  if (
+    event.status !== "published" ||
+    event.endsAt <= now ||
+    quiz.status !== "published" ||
+    (quiz.endsAt && quiz.endsAt <= now)
+  ) {
+    await finalizeAttempt(String(attempt._id), userId);
+    return getAttemptState(String(attempt._id), userId);
   }
   const total = quiz.questions.length;
   await ensureTiming(String(attempt._id), userId, quiz.durationSeconds, total);
@@ -156,11 +187,8 @@ export async function beginAttempt(quizId: string, userId: string) {
 }
 
 /**
- * Idempotent per-question answer persistence. The client may call this for
- * the current question on every change, on timeout, and again before
- * navigating to the next question; whichever request satisfies the
- * authoritative deadline first wins and later calls receive the persisted
- * final state unchanged. `answer: null` finalizes the question as skipped.
+ * Answers remain editable until the server-issued question deadline. A null
+ * answer finalizes the current selection (or skips an unanswered question).
  */
 export async function saveQuestionAnswer(
   attemptId: string,
@@ -184,7 +212,8 @@ export async function saveQuestionAnswer(
     Number.isInteger(answer) &&
     answer >= 0 &&
     answer < quiz.questions[index]!.options.length;
-  const outcome = validAnswer ? "answered" : "skipped";
+  if (answer !== null && !validAnswer)
+    return fail(400, "INVALID_ANSWER", "Select a valid answer option");
   const now = new Date();
   const deadline = attempt.questionDeadlines?.[index];
   if (deadline && now > new Date(deadline)) {
@@ -198,15 +227,26 @@ export async function saveQuestionAnswer(
       },
       { $set: { [`finalizedAt.${index}`]: now } },
     );
-    const locked = await QuizAttempt.findById(attemptId).select("answers").lean();
+    const locked = await QuizAttempt.findById(attemptId)
+      .select("answers finalizedAt")
+      .lean();
     return {
       index,
       accepted: false,
       status: (locked?.answers?.[index] ?? -1) >= 0 ? "answered" : "skipped",
       locked: true,
+      finalizedAt: iso(locked?.finalizedAt?.[index] ?? now),
       reason: "expired",
     };
   }
+  if (answer === null && deadline && now < new Date(deadline))
+    return {
+      index,
+      accepted: false,
+      status: (attempt.answers?.[index] ?? -1) >= 0 ? "answered" : "skipped",
+      locked: false,
+      reason: "still_open",
+    };
   const updated = await QuizAttempt.updateOne(
     {
       _id: attemptId,
@@ -217,12 +257,12 @@ export async function saveQuestionAnswer(
     },
     {
       $set: {
-        [`answers.${index}`]: validAnswer ? answer : -1,
-        [`finalizedAt.${index}`]: now,
+        ...(answer === null ? {} : { [`answers.${index}`]: answer }),
+        ...(answer === null ? { [`finalizedAt.${index}`]: now } : {}),
       },
     },
   );
-  if (updated.modifiedCount === 0) {
+  if (updated.matchedCount === 0) {
     // Lost a race with another tab, a retry, or the admin termination —
     // return the persisted final state instead of overwriting it.
     const current = await QuizAttempt.findById(attemptId).lean();
@@ -232,7 +272,14 @@ export async function saveQuestionAnswer(
       return finalizedResponse(current, index, "already_submitted");
     return fail(409, "ATTEMPT_LOCKED", "This quiz attempt is no longer editable");
   }
-  return { index, accepted: true, status: outcome, locked: true };
+  const selected = answer === null ? attempt.answers?.[index] : answer;
+  return {
+    index,
+    accepted: true,
+    status: selected != null && selected >= 0 ? "answered" : "skipped",
+    locked: answer === null,
+    ...(answer === null ? { finalizedAt: now.toISOString() } : {}),
+  };
 }
 
 function finalizedResponse(attempt: AttemptRow, index: number, reason: string) {
@@ -269,15 +316,21 @@ export async function getAttemptState(attemptId: string, userId: string) {
     submittedAt: iso(attempt.submittedAt ?? null),
     scoreRevealed: false,
     quiz: {
-      title: quiz.title,
-      durationSeconds: quiz.durationSeconds,
-      questions: quiz.questions.map((question, index) => ({
+      title: quiz?.title ?? "Quiz",
+      durationSeconds: quiz?.durationSeconds ?? 0,
+      questions: (quiz?.questions ?? []).map((question, index) => ({
         id: String(index),
         text: question.text,
         options: question.options,
       })),
     },
   };
+}
+
+/** Read an existing attempt without creating one, so refreshes cannot restart a quiz. */
+export async function getMyQuizAttempt(quizId: string, userId: string) {
+  const attempt = await QuizAttempt.findOne({ quizId, userId }).select("_id").lean();
+  return attempt ? getAttemptState(String(attempt._id), userId) : null;
 }
 
 /**
@@ -413,26 +466,29 @@ export async function finalizeAttempt(attemptId: string, userId: string) {
     };
   const quiz = await Quiz.findById(attempt.quizId);
   if (!quiz) return fail(404, "NOT_FOUND", "Quiz not found");
-  const total = quiz.questions.length;
   const now = new Date();
-  const rawAnswers = attempt.answers ?? [];
-  const answers = Array.from({ length: total }, (_, index) => {
-    const value = rawAnswers[index];
-    return value != null && value >= 0 ? value : null;
-  });
-  const finalizedAt = Array.from({ length: total }, (_, index) =>
-    attempt.finalizedAt?.[index] ? new Date(attempt.finalizedAt[index]!) : now,
-  );
   const submitted = await QuizAttempt.findOneAndUpdate(
     { _id: attemptId, userId, submittedAt: { $exists: false } },
-    {
+    [{
       $set: {
-        answers,
-        finalizedAt,
+        answers: {
+          $map: {
+            input: { $ifNull: ["$answers", []] },
+            as: "value",
+            in: { $cond: [{ $eq: ["$$value", -1] }, null, "$$value"] },
+          },
+        },
+        finalizedAt: {
+          $map: {
+            input: { $ifNull: ["$finalizedAt", []] },
+            as: "value",
+            in: { $ifNull: ["$$value", now] },
+          },
+        },
         submittedAt: now,
         ...(quiz.status !== "published" ? { endedByAdminAt: now } : {}),
       },
-    },
+    }],
     { new: true },
   );
   if (!submitted) {

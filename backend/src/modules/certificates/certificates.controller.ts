@@ -4,11 +4,13 @@ import { objectId, parseBody } from "../../common/validators/object-id.js";
 import {
   addTemplate,
   editTemplate,
+  generateEventCertificates,
+  getEventCertificateStatus,
   getTemplates,
   issueCertificates,
-  issueWinnerCertificate,
   listUserCertificates,
   renderCertificatePdf,
+  publishEventCertificates as publishGeneratedEventCertificates,
   revokeIssuedCertificate,
   verifyIssuedCertificate,
 } from "./certificates.service.js";
@@ -17,6 +19,8 @@ import {
   certificateTemplateInput,
   certificateTemplateUpdateInput,
   publishCertificateInput,
+  generateEventCertificatesInput,
+  publishEventCertificatesInput,
 } from "./certificates.validator.js";
 
 export const listCertificateTemplates = asyncRoute(async (_req, res) =>
@@ -45,9 +49,18 @@ export const publishCertificates = asyncRoute(async (req, res) => {
   return success(res, await issueCertificates(req.principal!.id, templateId));
 });
 
-export const publishWinnerCertificate = asyncRoute(async (req, res) => {
-  const { templateId } = parseBody(publishCertificateInput, req.body);
-  return success(res, await issueWinnerCertificate(req.principal!.id, parseBody(objectId, req.params.quizId), templateId), 201);
+export const getEventCertificates = asyncRoute(async (req, res) =>
+  success(res, await getEventCertificateStatus(parseBody(objectId, req.params.eventId))),
+);
+
+export const generateEventCertificateBatch = asyncRoute(async (req, res) => {
+  const input = parseBody(generateEventCertificatesInput, req.body);
+  return success(res, await generateEventCertificates(req.principal!.id, parseBody(objectId, req.params.eventId), input), 201);
+});
+
+export const publishEventCertificateBatch = asyncRoute(async (req, res) => {
+  const input = parseBody(publishEventCertificatesInput, req.body);
+  return success(res, await publishGeneratedEventCertificates(req.principal!.id, parseBody(objectId, req.params.eventId), input.certificateType, input.competitionId));
 });
 
 export const getMyCertificates = asyncRoute(async (req, res) =>

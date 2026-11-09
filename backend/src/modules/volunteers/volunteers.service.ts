@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import bcrypt from "bcryptjs";
 import { fail } from "../../common/errors/app-error.js";
 import { recordAudit } from "../../common/utils/audit.js";
@@ -10,12 +11,13 @@ export async function getVolunteers() {
 
 export async function addVolunteer(
   adminId: string,
-  input: { name: string; email: string; password: string },
+  input: { name: string; email: string },
 ) {
+  const password = randomBytes(24).toString("base64url");
   const user = await User.create({
     ...input,
     email: input.email.toLowerCase(),
-    passwordHash: await bcrypt.hash(input.password, 12),
+    passwordHash: await bcrypt.hash(password, 12),
     role: "volunteer",
   });
   await recordAudit(adminId, "volunteer.created", "user", String(user._id));
@@ -24,6 +26,7 @@ export async function addVolunteer(
     name: user.name,
     email: user.email,
     active: user.active,
+    password,
   };
 }
 

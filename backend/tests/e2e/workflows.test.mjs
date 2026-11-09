@@ -260,14 +260,25 @@ try {
     body: {
       name: "Temporary Volunteer",
       email: "temporary@e2e.test",
-      password: "E2e-temporary-volunteer-2026!",
     },
   });
   assert.equal(newVolunteer.response.status, 201);
-  assert.equal("passwordHash" in newVolunteer.result.data, false);
+  assert.equal("passwordHash" in newVolunteer.result.data.volunteer, false);
   assert.equal(
     (
-      await call(`/volunteers/${newVolunteer.result.data.id}/status`, {
+      await call("/auth/login", {
+        method: "POST",
+        body: {
+          email: "temporary@e2e.test",
+          password: newVolunteer.result.data.password,
+        },
+      })
+    ).response.status,
+    200,
+  );
+  assert.equal(
+    (
+      await call(`/volunteers/${newVolunteer.result.data.volunteer.id}/status`, {
         method: "PATCH",
         actor: accounts.admin,
         body: { active: false },
@@ -281,7 +292,7 @@ try {
         method: "POST",
         body: {
           email: "temporary@e2e.test",
-          password: "E2e-temporary-volunteer-2026!",
+          password: newVolunteer.result.data.password,
         },
       })
     ).response.status,
@@ -346,6 +357,15 @@ try {
       .status,
     403,
   );
+  assert.equal(
+    (
+      await call(`/quizzes/${quizId}/close`, {
+        method: "POST",
+        actor: accounts.admin,
+      })
+    ).result.data.status,
+    "closed",
+  );
   await call(`/quizzes/${quizId}/results/publish`, {
     method: "POST",
     actor: accounts.admin,
@@ -355,12 +375,6 @@ try {
       .data[0].score,
     1,
   );
-  assert.equal(
-    (await call(`/quizzes/${quizId}/close`, { method: "POST", actor: accounts.admin }))
-      .result.data.status,
-    "closed",
-  );
-
   // --- Autosave lifecycle: start -> answers -> state resume -> finalize ---
   const autosaveQuiz = await call("/quizzes", {
     method: "POST",
@@ -387,50 +401,44 @@ try {
     actor: winnerActor,
   });
   assert.equal(secondAttempt.response.status, 201);
-  // The autosave attempt row is the same one created by the legacy submit
-  // (unique quiz/user index), so its answers are already persisted. Re-entering
-  // returns that snapshot; finalize then submits it with the correct answer
-  // kept and question two skipped.
   const attemptId = secondAttempt.result.data.attemptId;
-  // Re-entering an in-flight attempt returns the same attempt snapshot
-  // (same attemptId, persisted answers) instead of starting over.
+  const initialAnswer = await call(`/quiz-attempts/${attemptId}/answers`, {
+    method: "POST",
+    actor: winnerActor,
+    body: { index: 0, answer: 1 },
+  });
+  assert.equal(initialAnswer.result.data.accepted, true);
+  assert.equal(initialAnswer.result.data.locked, false);
+  // Re-entering resumes the same attempt and keeps the saved, editable answer.
   const resumed = await call(`/quizzes/${autosaveQuizId}/start`, {
     method: "POST",
     actor: winnerActor,
   });
   assert.equal(resumed.response.status, 201);
   assert.equal(resumed.result.data.attemptId, attemptId);
-  assert.equal(resumed.result.data.answers[0], 0);
-  // Autosave is idempotent: re-saving the locked question never overwrites.
+  assert.equal(resumed.result.data.answers[0], 1);
+  // Participants can change their choice until the question deadline.
   const savedAnswer = await call(`/quiz-attempts/${attemptId}/answers`, {
     method: "POST",
     actor: winnerActor,
     body: { index: 0, answer: 0 },
   });
   assert.equal(savedAnswer.response.status, 200);
-  assert.equal(savedAnswer.result.data.locked, true);
+  assert.equal(savedAnswer.result.data.accepted, true);
+  assert.equal(savedAnswer.result.data.locked, false);
   assert.equal(savedAnswer.result.data.status, "answered");
   const attemptState = await call(`/quiz-attempts/${attemptId}/state`, {
     actor: winnerActor,
   });
   assert.equal(attemptState.result.data.answers[0], 0);
   assert.equal(attemptState.result.data.status, "in_progress");
-  const finalized = await call(`/quiz-attempts/${attemptId}/finalize`, {
-    method: "POST",
-    actor: winnerActor,
-    body: {},
-  });
-  assert.equal(finalized.response.status, 200);
-  assert.equal(finalized.result.data.completed, true);
-  assert.equal(finalized.result.data.alreadyCompleted, false);
-  assert.equal(finalized.result.data.scoreRevealed, false);
   // Scores stay private before publication, even from the participant themself.
   assert.equal(
     (await call(`/quizzes/${autosaveQuizId}/leaderboard`, { actor: winnerActor })).response
       .status,
     403,
   );
-  // Publishing requires every started attempt to be submitted first.
+  // Publishing requires the administrator to close the quiz first.
   assert.equal(
     (
       await call(`/quizzes/${autosaveQuizId}/results/publish`, {
@@ -448,6 +456,15 @@ try {
   });
   assert.equal(endedEarly.response.status, 200);
   assert.ok(endedEarly.result.data.finalizedAttempts >= 1);
+  const finalized = await call(`/quiz-attempts/${attemptId}/finalize`, {
+    method: "POST",
+    actor: winnerActor,
+    body: {},
+  });
+  assert.equal(finalized.response.status, 200);
+  assert.equal(finalized.result.data.completed, true);
+  assert.equal(finalized.result.data.alreadyCompleted, true);
+  assert.equal(finalized.result.data.scoreRevealed, false);
   await call(`/quizzes/${autosaveQuizId}/results/publish`, {
     method: "POST",
     actor: accounts.admin,
@@ -465,7 +482,7 @@ try {
   assert.equal(myResult.result.data.rank, 1);
 
   // --- Fest configuration endpoint ---
-  assert.equal((await call("/fest/dates")).result.data.startsAt, null);
+  assert.equal((await call("/fest/dates")).result.data, null);
   assert.equal(
     (
       await call("/fest/dates", {
@@ -489,6 +506,17 @@ try {
   assert.equal(festDates.result.data.title, "E2E Fest");
   assert.ok(festDates.result.data.startsAt);
 
+  const completedAt = Date.now();
+  const completedEvent = await call(`/events/${eventId}`, {
+    method: "PATCH",
+    actor: accounts.admin,
+    body: {
+      startsAt: new Date(completedAt - 3_600_000).toISOString(),
+      endsAt: new Date(completedAt - 1_000).toISOString(),
+    },
+  });
+  assert.equal(completedEvent.response.status, 200);
+
   const template = await call("/certificates/templates", {
     method: "POST",
     actor: accounts.admin,
@@ -510,11 +538,27 @@ try {
     },
   );
   assert.equal(updatedTemplate.result.data.description, "Verified event completion");
-  const published = await call("/certificates/publish", {
+  const generated = await call(`/certificates/events/${eventId}/generate`, {
     method: "POST",
     actor: accounts.admin,
-    body: { templateId: template.result.data._id },
+    body: { templateId: template.result.data._id, certificateType: "participation" },
   });
+  assert.equal(generated.response.status, 201);
+  assert.deepEqual(generated.result.data, { generated: 1, total: 1 });
+  const duplicateGeneration = await call(`/certificates/events/${eventId}/generate`, {
+    method: "POST",
+    actor: accounts.admin,
+    body: { templateId: template.result.data._id, certificateType: "participation" },
+  });
+  assert.deepEqual(duplicateGeneration.result.data, { generated: 0, total: 1 });
+  assert.equal((await call("/certificates/me", { actor: winnerActor })).result.data.length, 0);
+  const unpublished = await call(`/certificates/events/${eventId}/publish`, {
+    method: "POST",
+    actor: accounts.admin,
+    body: { certificateType: "participation" },
+  });
+  assert.equal(unpublished.response.status, 200);
+  const published = unpublished;
   assert.equal(published.result.data.published, 1);
   const certificates = await call("/certificates/me", { actor: winnerActor });
   assert.equal(certificates.result.data.length, 1);
@@ -532,10 +576,10 @@ try {
     ).response.status,
     200,
   );
-  assert.equal(
-    (await call(`/certificates/verify/${certificateId}`)).response.status,
-    410,
-  );
+  const revokedVerification = await call(`/certificates/verify/${certificateId}`);
+  assert.equal(revokedVerification.response.status, 200);
+  assert.equal(revokedVerification.result.data.status, "revoked");
+  assert.equal(revokedVerification.result.data.valid, false);
   assert.equal(
     (await call("/certificates/me", { actor: winnerActor })).result.data.length,
     0,

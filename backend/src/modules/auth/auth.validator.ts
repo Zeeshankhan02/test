@@ -6,6 +6,11 @@ export const signupSchema = z.object({
   password: z.string().min(12).max(128),
 });
 
+export const otpVerificationSchema = z.object({
+  email: z.email().transform((value) => value.trim().toLowerCase()),
+  otp: z.string().regex(/^\d{6}$/, "Enter the six-digit code"),
+});
+
 export const loginSchema = z.object({
   email: z.email(),
   password: z.string().min(1).max(128),
@@ -14,6 +19,7 @@ export const loginSchema = z.object({
 export const passwordResetRequestSchema = z.object({ email: z.email() });
 
 export const passwordResetSchema = z.object({
-  token: z.string().min(32).max(128),
+  email: z.email().transform((value) => value.trim().toLowerCase()),
+  otp: z.string().regex(/^\d{6}$/, "Enter the six-digit code"),
   password: z.string().min(12).max(128),
 });

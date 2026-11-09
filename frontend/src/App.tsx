@@ -6,12 +6,13 @@ import {
   Routes,
   useLocation,
   useNavigate,
+  useParams,
 } from "react-router-dom";
+import { PDFDownloadLink, PDFViewer } from "@react-pdf/renderer";
 import QRCode from "react-qr-code";
 import {
   Activity,
   Archive,
-  ArrowDownRight,
   ArrowRight,
   ArrowUpRight,
   Bell,
@@ -50,25 +51,27 @@ import {
   ApiError,
   daysUntil,
   festDateLabel,
+  festDurationLabel,
   useFestDates,
   type ApiAdminQuiz,
   type ApiCompetition,
   type ApiCompetitionRank,
   type ApiCompetitionProgress,
+  type ApiCompetitionLeaderboards,
   type ApiCertificate,
-  type ApiCertificateTemplate,
   type ApiFestDates,
   type ApiQuiz,
   type ApiQuizResultRow,
   type ApiRegistration,
   type EventDraft,
 } from "./api";
-import type { Event, Rank, Role, User, Notice } from "./types";
+import type { Event, Role, User, Notice } from "./types";
 import LandingPage from "./LandingPage";
 import ThemeToggle from "./ThemeToggle";
 import type { TicketScanStatus } from "./ticketValidation";
 import { useAuth } from "./AuthContext";
 import { CertificatesPage, VolunteersPage } from "./AdminManagement";
+import CertificatePdf from "./CertificatePdf";
 
 type AppUser = User;
 
@@ -129,6 +132,7 @@ function App() {
   return (
     <>
       <Routes>
+        <Route path="/certificate/verify/:certificateId?" element={<PublicCertificateVerification />} />
         <Route
           path="/login"
           element={
@@ -227,15 +231,12 @@ function Login({
   const [role, setRole] = useState<Role>("student");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [resetToken] = useState(() =>
-    new URLSearchParams(window.location.search).get("reset"),
-  );
-  const [authMode, setAuthMode] = useState<"login" | "forgot" | "reset">(
-    resetToken ? "reset" : "login",
-  );
+  const [authMode, setAuthMode] = useState<"login" | "forgot" | "verifyReset">("login");
+  const [otp, setOtp] = useState("");
   const [notice, setNotice] = useState("");
   const festDates = useFestDates();
   const festLabel = festDateLabel(festDates);
+  const festDuration = festDurationLabel(festDates);
   const festName = festDates?.title ?? "YUKTI";
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -266,7 +267,7 @@ function Login({
             your mark.
           </p>
           <div className="login-date">
-            <CalendarDays size={17} /> {festLabel ?? "OCT 15 — 17, 2026"}{" "}
+            <CalendarDays size={17} /> {festLabel ?? "Dates coming soon"}{festDuration ? ` · ${festDuration}` : ""}{" "}
             <span /> {festName}
           </div>
         </div>
@@ -301,7 +302,10 @@ function Login({
             if (authMode === "forgot") {
               void api
                 .requestPasswordReset(email)
-                .then((result) => setNotice(result.message))
+                .then((result) => {
+                  setNotice(result.message);
+                  setAuthMode("verifyReset");
+                })
                 .catch((cause: unknown) =>
                   setError(
                     cause instanceof Error
@@ -312,16 +316,16 @@ function Login({
                 .finally(() => setSubmitting(false));
               return;
             }
-            if (authMode === "reset" && resetToken) {
+            if (authMode === "verifyReset") {
               void api
-                .resetPassword(resetToken, password)
-                .then(() => {
-                  setNotice(
-                    "Password changed. Sign in with your new password.",
-                  );
+                .resetPassword(email, otp, password)
+                .then(async () => {
                   setAuthMode("login");
-                  window.history.replaceState({}, "", "/login");
-                  setPassword("");
+                  setOtp("");
+                  setNotice("Password changed. Signing you in…");
+                  const signedIn = await onLogin(role, email, password);
+                  setNotice(signedIn ? "Password changed and you’re signed in." : "");
+                  if (!signedIn) setError("Password changed, but this account does not have access to the selected workspace.");
                 })
                 .catch((cause: unknown) =>
                   setError(
@@ -355,7 +359,7 @@ function Login({
             energy is.
           </h2>
           <p>Choose how you’d like to enter the platform.</p>
-          {authMode !== "reset" && (
+          {
             <label className="auth-field">
               Email
               <input
@@ -364,25 +368,26 @@ function Login({
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 required
+                readOnly={authMode === "verifyReset"}
                 placeholder="you@college.edu"
               />
             </label>
-          )}
+          }
           {authMode !== "forgot" && (
             <label className="auth-field">
-              {authMode === "reset" ? "New password" : "Password"}
+              {authMode === "verifyReset" ? "New password" : "Password"}
               <span className="auth-password">
                 <input
                   type={showPassword ? "text" : "password"}
                   autoComplete={
-                    authMode === "reset" ? "new-password" : "current-password"
+                    authMode === "verifyReset" ? "new-password" : "current-password"
                   }
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   required
                   minLength={12}
                   placeholder={
-                    authMode === "reset"
+                    authMode === "verifyReset"
                       ? "Enter a new password"
                       : "Enter your password"
                   }
@@ -395,6 +400,23 @@ function Login({
                   {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
                 </button>
               </span>
+            </label>
+          )}
+          {authMode === "verifyReset" && (
+            <label className="auth-field">
+              Password reset code
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                value={otp}
+                onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                required
+                placeholder="Enter the 6-digit code"
+              />
+              <small>The code expires in 10 minutes.</small>
             </label>
           )}
           {notice && <p role="status">{notice}</p>}
@@ -440,12 +462,28 @@ function Login({
             {submitting
               ? "Please wait..."
               : authMode === "forgot"
-                ? "Send reset link"
-                : authMode === "reset"
-                  ? "Reset password"
+                ? "Send verification code"
+                : authMode === "verifyReset"
+                  ? "Change password"
                   : `Continue as ${role}`}
             <ArrowRight size={17} />
           </button>
+          {authMode === "verifyReset" && (
+            <button
+              type="button"
+              className="text-link"
+              disabled={submitting}
+              onClick={() => {
+                setSubmitting(true);
+                void api.requestPasswordReset(email)
+                  .then((result) => setNotice(result.message))
+                  .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not resend the code."))
+                  .finally(() => setSubmitting(false));
+              }}
+            >
+              Resend code
+            </button>
+          )}
           {authMode === "login" && (
             <button
               type="button"
@@ -459,7 +497,7 @@ function Login({
               Forgot password?
             </button>
           )}
-          {authMode !== "login" && (
+              {authMode !== "login" && (
             <button
               type="button"
               className="text-link"
@@ -489,9 +527,10 @@ function Login({
 
 function SignupPage({ user }: { user: AppUser | null }) {
   const navigate = useNavigate();
-  const { signupStudent } = useAuth();
+  const { signupStudent, verifyStudentSignup } = useAuth();
   const festDates = useFestDates();
   const festLabel = festDateLabel(festDates);
+  const festDuration = festDurationLabel(festDates);
   const festName = festDates?.title ?? "YUKTI";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -500,18 +539,33 @@ function SignupPage({ user }: { user: AppUser | null }) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [fieldErrors, setFieldErrors] = useState<{
     email?: string;
     password?: string;
     confirmPassword?: string;
   }>({});
   const [success, setSuccess] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [otp, setOtp] = useState("");
   useEffect(() => {
     if (user) navigate(`/${user.role}`);
   }, [user, navigate]);
   const submit = (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError("");
+    if (otpSent) {
+      if (!/^\d{6}$/.test(otp)) {
+        setError("Enter the six-digit code sent to your email.");
+        return;
+      }
+      setLoading(true);
+      void verifyStudentSignup(email, otp)
+        .then(() => setSuccess(true))
+        .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not verify your email."))
+        .finally(() => setLoading(false));
+      return;
+    }
     const next: typeof fieldErrors = {};
     if (!email.trim()) next.email = "Enter your email address.";
     else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
@@ -526,7 +580,10 @@ function SignupPage({ user }: { user: AppUser | null }) {
     if (Object.keys(next).length) return;
     setLoading(true);
     void signupStudent(email, password)
-      .then(() => setSuccess(true))
+      .then(() => {
+        setOtpSent(true);
+        setNotice("A verification code has been sent to your email.");
+      })
       .catch((cause: unknown) =>
         setError(
           cause instanceof Error
@@ -560,7 +617,7 @@ function SignupPage({ user }: { user: AppUser | null }) {
           </p>
         </div>
         <div className="promo-foot">
-          {festName} · {festLabel ?? "OCTOBER 15—17, 2026"}
+          {festName} · {festLabel ?? "Dates coming soon"}{festDuration ? ` · ${festDuration}` : ""}
         </div>
         <div className="orb orb-one" />
         <div className="orb orb-two" />
@@ -609,13 +666,14 @@ function SignupPage({ user }: { user: AppUser | null }) {
                 value={email}
                 onChange={(event) => setEmail(event.target.value)}
                 required
+                readOnly={otpSent}
                 placeholder="you@college.edu"
               />
               {fieldErrors.email && (
                 <small className="auth-error">{fieldErrors.email}</small>
               )}
             </label>
-            <label className="auth-field">
+            {!otpSent && <label className="auth-field">
               Password
               <span className="auth-password">
                 <input
@@ -625,7 +683,7 @@ function SignupPage({ user }: { user: AppUser | null }) {
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   required
-                  placeholder="At least 8 characters"
+                  placeholder="At least 12 characters"
                 />
                 <button
                   type="button"
@@ -638,8 +696,8 @@ function SignupPage({ user }: { user: AppUser | null }) {
               {fieldErrors.password && (
                 <small className="auth-error">{fieldErrors.password}</small>
               )}
-            </label>
-            <label className="auth-field">
+            </label>}
+            {!otpSent && <label className="auth-field">
               Confirm password
               <span className="auth-password">
                 <input
@@ -668,20 +726,51 @@ function SignupPage({ user }: { user: AppUser | null }) {
                   {fieldErrors.confirmPassword}
                 </small>
               )}
-            </label>
+            </label>}
+            {otpSent && <label className="auth-field">
+              Email verification code
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                pattern="[0-9]{6}"
+                maxLength={6}
+                value={otp}
+                onChange={(event) => setOtp(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                required
+                placeholder="Enter the 6-digit code"
+              />
+              <small>Check your email. The code expires in 10 minutes.</small>
+            </label>}
             {error && (
               <p className="auth-error" role="alert">
                 {error}
               </p>
             )}
+            {notice && <p role="status">{notice}</p>}
             <button
               className="btn btn-primary btn-wide"
               type="submit"
               disabled={loading}
             >
-              {loading ? "Creating account…" : "Create student account"}
+              {loading ? "Please wait…" : otpSent ? "Verify email and create account" : "Send verification code"}
               <ArrowRight size={17} />
             </button>
+            {otpSent && <button
+              type="button"
+              className="text-link"
+              disabled={loading}
+              onClick={() => {
+                setLoading(true);
+                void signupStudent(email, password)
+                  .then(() => {
+                    setError("");
+                    setNotice("A new code has been sent to your email.");
+                  })
+                  .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not resend the code."))
+                  .finally(() => setLoading(false));
+              }}
+            >Resend code</button>}
             <p className="auth-switch">
               Already have an account? <Link to="/login">Log in</Link>
             </p>
@@ -705,6 +794,9 @@ function Workspace({
   onLogout: () => void;
   toast: (s: string) => void;
 }) {
+  const festDates = useFestDates();
+  const festName = festDates?.title ?? "YUKTI";
+  const festYear = festDates?.startsAt ? new Date(festDates.startsAt).getFullYear() : new Date().getFullYear();
   const location = useLocation();
   const navigate = useNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
@@ -729,7 +821,9 @@ function Workspace({
   );
   const base = `/${user.role}`;
   const title =
-    nav.find((n) => location.pathname === n.path)?.label || nav[0].label;
+    location.pathname === `${base}/profile`
+      ? "My profile"
+      : nav.find((n) => location.pathname === n.path)?.label || nav[0].label;
   return (
     <div className={`app-shell role-${user.role}`}>
       <aside className={`sidebar ${mobileOpen ? "sidebar-open" : ""}`}>
@@ -737,15 +831,15 @@ function Workspace({
           <span className="brand-mark">
             <Sparkles size={18} />
           </span>
-          FestiQO<span className="brand-beta">2026</span>
+          FestiQO<span className="brand-beta">{festYear}</span>
         </Link>
         <div className="workspace-switch">
           <div className="workspace-symbol">
             <Flame size={17} />
           </div>
           <div>
-            <b>YUKTI</b>
-            <small>Annual Fest · 2026</small>
+            <b>{festName}</b>
+            <small>Annual Fest · {festYear}</small>
           </div>
           <ChevronDown size={15} />
         </div>
@@ -842,8 +936,9 @@ function Workspace({
             <span className="top-divider" />
             <button
               className="role-switch"
-              title="Switch demo role"
-              onClick={() => onLogout()}
+              title="View profile"
+              aria-label="View profile"
+              onClick={() => navigate(`${base}/profile`)}
             >
               <img src={user.avatar} />
               <ChevronDown size={14} />
@@ -871,7 +966,8 @@ function Workspace({
         )}
         <div className="page-content">
           <Routes>
-            <Route path="/" element={<Dashboard user={user} toast={toast} />} />
+            <Route path="/profile" element={<ProfilePage user={user} />} />
+            <Route path="/" element={<Dashboard user={user} toast={toast} studentQuizzes={studentQuizzes} />} />
             <Route
               path="/events"
               element={
@@ -936,6 +1032,8 @@ function Workspace({
               element={
                 user.role === "admin" ? (
                   <CertificatesPage toast={toast} />
+                ) : user.role === "student" ? (
+                  <section className="content-section"><div className="section-heading"><div><div className="eyebrow">YOUR FEST ACHIEVEMENTS</div><h2>My certificates</h2></div></div><StudentCertificates festName={festName} /></section>
                 ) : (
                   <Navigate to="/unauthorized" replace />
                 )
@@ -951,7 +1049,7 @@ function Workspace({
                 )
               }
             />
-            <Route path="*" element={<Dashboard user={user} toast={toast} />} />
+            <Route path="*" element={<Dashboard user={user} toast={toast} studentQuizzes={studentQuizzes} />} />
           </Routes>
         </div>
       </main>
@@ -992,13 +1090,29 @@ function MobileNav({
 function Dashboard({
   user,
   toast,
+  studentQuizzes,
 }: {
   user: AppUser;
   toast: (s: string) => void;
+  studentQuizzes: ApiQuiz[];
 }) {
   if (user.role === "volunteer") return <VolunteerDashboard />;
   if (user.role === "admin") return <AdminDashboard toast={toast} />;
-  return <StudentDashboard toast={toast} />;
+  return <StudentDashboard user={user} quizzes={studentQuizzes} />;
+}
+
+function ProfilePage({ user }: { user: AppUser }) {
+  return (
+    <section className="profile-card">
+      <img src={user.avatar} alt="" />
+      <div>
+        <div className="eyebrow">ACCOUNT DETAILS</div>
+        <h1>{user.name}</h1>
+        <p>{user.email}</p>
+        <span>{user.role}</span>
+      </div>
+    </section>
+  );
 }
 
 function PageHead({
@@ -1024,14 +1138,20 @@ function PageHead({
   );
 }
 
-function StudentDashboard({ toast }: { toast: (s: string) => void }) {
+function StudentDashboard({ user, quizzes }: { user: AppUser; quizzes: ApiQuiz[] }) {
   const [filter, setFilter] = useState("All events");
   const festDates = useFestDates();
   const festLabel = festDateLabel(festDates);
+  const festDuration = festDurationLabel(festDates);
   const festName = festDates?.title ?? "YUKTI";
   const { items: events, loading, error } = useEvents();
   const [registrations, setRegistrations] = useState<ApiRegistration[]>([]);
   const [registrationError, setRegistrationError] = useState("");
+  const [latestNotice, setLatestNotice] = useState<Notice | null>(null);
+  const [noticesLoading, setNoticesLoading] = useState(true);
+  const [noticesError, setNoticesError] = useState(false);
+  const [quizRank, setQuizRank] = useState<{ rank: number; detail: string } | null>(null);
+  const [quizRankLoading, setQuizRankLoading] = useState(true);
   useEffect(() => {
     void api
       .registrations()
@@ -1044,10 +1164,54 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
         ),
       );
   }, []);
+  useEffect(() => {
+    let disposed = false;
+    setQuizRankLoading(true);
+    void Promise.allSettled(
+      quizzes.map(async (quiz) => ({ quiz, board: await api.competitionLeaderboards(quiz._id) })),
+    ).then((results) => {
+      if (disposed) return;
+      const rounds = ["final", "round2", "round1"] as const;
+      for (const result of results) {
+        if (result.status !== "fulfilled") continue;
+        const { quiz, board } = result.value;
+        const publishedRank = rounds
+          .filter((round) => board[round].published)
+          .map((round) => ({ round, row: board[round].rankings.find((entry) => entry.userId === user.id) }))
+          .find((entry) => entry.row);
+        if (publishedRank?.row) {
+          const roundLabel = publishedRank.round === "round1" ? "Round 1" : publishedRank.round === "round2" ? "Round 2" : "Final";
+          setQuizRank({ rank: publishedRank.row.rank, detail: `${roundLabel} · ${quiz.title}` });
+          break;
+        }
+      }
+      setQuizRankLoading(false);
+    });
+    return () => {
+      disposed = true;
+    };
+  }, [quizzes, user.id]);
+  useEffect(() => {
+    let disposed = false;
+    void api
+      .notices()
+      .then((notices) => {
+        if (!disposed) setLatestNotice(notices[0] ?? null);
+      })
+      .catch(() => {
+        if (!disposed) setNoticesError(true);
+      })
+      .finally(() => {
+        if (!disposed) setNoticesLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
   const shown = useMemo(
     () =>
       events.filter((e) => filter === "All events" || e.category === filter),
-    [filter],
+    [events, filter],
   );
   return (
     <>
@@ -1062,7 +1226,7 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
             meet <em>energy.</em>
           </h1>
           <p>
-            Three days of big ideas, new faces and moments that stay with you.
+            {festDuration ? `${festDuration[0].toUpperCase()}${festDuration.slice(1)} of big ideas, new faces and moments that stay with you.` : "Big ideas, new faces and moments that stay with you. Fest dates coming soon."}
             Your fest starts here.
           </p>
           <div className="hero-buttons">
@@ -1075,7 +1239,7 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
           </div>
           <div className="hero-meta">
             <span>
-              <CalendarDays size={15} /> {festLabel ?? "OCT 15 — 17, 2026"}
+              <CalendarDays size={15} /> {festLabel ?? "Dates coming soon"}{festDuration ? ` · ${festDuration}` : ""}
             </span>
             <span className="meta-divider" />
             <span>
@@ -1086,7 +1250,7 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
         <div className="hero-art">
           <div className="hero-photo" />
           <div className="hero-chip chip-top">
-            <span className="live-dot" /> 3 DAYS OF WHAT’S NEXT
+            <span className="live-dot" /> {festDuration ? `${festDuration.toUpperCase()} OF WHAT’S NEXT` : "WHAT’S NEXT"}
           </div>
           <div className="hero-sticker">
             <span>
@@ -1133,8 +1297,8 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
         />
         <Stat
           label="Your quiz rank"
-          value="#04"
-          detail="Up 2 places this week"
+          value={quizRankLoading ? "…" : quizRank ? `#${quizRank.rank}` : "—"}
+          detail={quizRankLoading ? "Checking published results" : quizRank?.detail ?? "No published ranking yet"}
           icon={<Trophy size={18} />}
           tone="mint"
         />
@@ -1147,7 +1311,7 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
             <p>Top scorers get theirs as soon as organizers publish results.</p>
           </div>
         </div>
-        <StudentCertificates />
+        <StudentCertificates festName={festName} />
       </section>
       <section className="content-section">
         <div className="section-heading">
@@ -1243,21 +1407,32 @@ function StudentDashboard({ toast }: { toast: (s: string) => void }) {
         <div className="mini-notice">
           <div className="mini-notice-top">
             <span className="eyebrow">IN THE LOOP</span>
-            <button
-              className="icon-button"
-              onClick={() => toast("No new announcements")}
-            >
+            <Link className="icon-button" to="/student/notifications" aria-label="View notifications">
               <ArrowRight size={16} />
-            </button>
+            </Link>
           </div>
-          <h3>Quiz Results Out</h3>
-          <p>
-            Results for Tech Trivia just landed. You’re sitting at <b>#4</b> on
-            the leaderboard.
-          </p>
-          <span className="notice-time">
-            <span className="notice-dot" /> 2 hours ago
-          </span>
+          {noticesLoading ? (
+            <p role="status">Loading your latest update…</p>
+          ) : noticesError ? (
+            <>
+              <h3>Updates unavailable</h3>
+              <p>We couldn’t load your latest announcements.</p>
+            </>
+          ) : latestNotice ? (
+            <>
+              <h3>{latestNotice.title}</h3>
+              <p>{latestNotice.message}</p>
+              <span className="notice-time">
+                <span className="notice-dot" />
+                {new Date(latestNotice.timestamp).toLocaleString()}
+              </span>
+            </>
+          ) : (
+            <>
+              <h3>You’re all caught up</h3>
+              <p>No announcements or updates yet.</p>
+            </>
+          )}
         </div>
       </section>
     </>
@@ -1418,6 +1593,7 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
   const [event, setEvent] = useState<Event | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [now, setNow] = useState(Date.now());
   useEffect(() => {
     void api
       .event(eventId)
@@ -1453,6 +1629,33 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
       )
       .catch(() => setRegistrationStatus("error"));
   }, [eventId]);
+  useEffect(() => {
+    if (!event) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => window.clearInterval(timer);
+  }, [event?.id]);
+  const eventFull = !!event && event.registered >= event.maxParticipants;
+  const eventEnded = !!event && (
+    event.status === "ended" || (!!event.endsAt && Date.parse(event.endsAt) <= now)
+  );
+  const eventStarted = !!event && (
+    event.status === "live" || eventEnded || (!!event.startsAt && Date.parse(event.startsAt) <= now)
+  );
+  const registrationClosedReason = eventEnded
+    ? "This event has ended. Registration is closed."
+    : eventStarted
+      ? "This event has already started. Registration is closed."
+      : eventFull
+        ? "This event is full. Registration is closed."
+        : "";
+  const lastAvailabilityNotice = useRef("");
+  useEffect(() => {
+    if (!event || !registrationClosedReason) return;
+    const noticeKey = `${event.id}:${registrationClosedReason}`;
+    if (lastAvailabilityNotice.current === noticeKey) return;
+    lastAvailabilityNotice.current = noticeKey;
+    toast(registrationClosedReason);
+  }, [event?.id, registrationClosedReason, toast]);
   if (loading) return <p role="status">Loading event…</p>;
   if (error || !event)
     return (
@@ -1463,7 +1666,7 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
       />
     );
   const register = async () => {
-    if (!user || registering || registrationStatus !== "available") return;
+    if (!user || registering || registrationStatus !== "available" || registrationClosedReason) return;
     setRegistering(true);
     try {
       const memberEmails = memberEmailsText.split(/[\n,]+/).map((email) => email.trim()).filter(Boolean);
@@ -1471,6 +1674,18 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
       setRegistrationStatus("registered");
       toast(`You’re registered for ${event.title}. Your ticket is ready.`);
     } catch (cause) {
+      if (cause instanceof ApiError && cause.code === "EVENT_FULL") {
+        setEvent((current) => current ? { ...current, registered: current.maxParticipants } : current);
+        return;
+      }
+      if (cause instanceof ApiError && cause.code === "REGISTRATION_CLOSED") {
+        setNow(Date.now());
+        if (event.status === "upcoming" && event.startsAt && Date.parse(event.startsAt) > Date.now()) {
+          setRegistrationStatus("error");
+          toast(cause.message);
+        }
+        return;
+      }
       toast(
         cause instanceof Error
           ? cause.message
@@ -1575,27 +1790,34 @@ function EventDetail({ toast }: { toast: (s: string) => void }) {
             onClick={() => void register()}
             disabled={
               registering ||
+              !!registrationClosedReason ||
               registrationStatus === "checking" ||
               registrationStatus === "registered" ||
               registrationStatus === "error" ||
               (registrationType === "team" && (teamName.trim().length < 2 || !/^[\p{L}\p{N} _.-]+$/u.test(teamName.trim()) || !!teamEmailError || configuredTeamSize < (event.teamMin ?? 2) || configuredTeamSize > (event.teamMax ?? 20)))
             }
           >
-            {registrationStatus === "registered"
-              ? "Already registered"
-              : registrationStatus === "checking"
-                ? "Checking registration…"
-                : registrationStatus === "error"
-                  ? "Registration unavailable"
-                  : registering
-                    ? "Registering…"
-                    : "Register for free"}{" "}
+            {eventEnded
+              ? "Event ended"
+              : eventStarted
+                ? "Event already started"
+                : eventFull
+                  ? "Event full"
+                  : registrationStatus === "registered"
+                    ? "Already registered"
+                    : registrationStatus === "checking"
+                      ? "Checking registration…"
+                      : registrationStatus === "error"
+                        ? "Registration unavailable"
+                        : registering
+                          ? "Registering…"
+                          : "Register for free"}{" "}
             <ArrowRight size={16} />
           </button>
           <small>
-            {registrationStatus === "error"
+            {registrationClosedReason || (registrationStatus === "error"
               ? "Could not verify your registration. Refresh the page to try again."
-              : "No payment required · Limited spots available"}
+              : "No payment required · Limited spots available")}
           </small>
         </aside>
       </div>
@@ -1638,61 +1860,74 @@ function TicketsPage({ toast }: { toast: (s: string) => void }) {
         <Empty
           icon={<Ticket />}
           title="No tickets yet"
-          text="Register for a published event and your ticket will appear here."
+          text="Tickets for your registered events appear here and stay in your history if an event ends, is cancelled, or is archived."
         />
       ) : (
-        tickets.map(({ ticket, registration, event }) => (
+        tickets.map(({ ticket, registration, event }) => {
+          const ticketStatus =
+            ticket.status === "active"
+              ? "ACTIVE"
+              : ticket.status === "checked_in"
+                ? "CHECKED IN"
+                : ticket.status === "cancelled"
+                  ? "CANCELLED"
+                  : ticket.status === "revoked"
+                    ? "REVOKED"
+                    : "STATUS UNAVAILABLE";
+          const ticketMessage =
+            ticket.status === "checked_in"
+              ? "This ticket has already been scanned and cannot be used again."
+              : ticket.status === "cancelled" || ticket.status === "revoked"
+                ? "This ticket is no longer valid for entry."
+                : !event
+                  ? "The event was removed. This ticket is retained for your records; contact the organizers if you need event details."
+                  : event.status === "cancelled"
+                    ? "This event was cancelled. Contact the organizers about your registration."
+                    : event.status === "archived"
+                      ? "The organizers archived this event. Your ticket remains in your history."
+                      : event.status === "ended"
+                        ? "This event has ended. Your ticket remains in your history."
+                        : "";
+          const ticketUsable =
+            ticket.status === "active" && event?.status !== "cancelled";
+          return (
           <div className="ticket-layout" key={ticket._id}>
             <div className="ticket-card">
               <div className="ticket-main">
                 <div className="ticket-head">
                   <span className="category-tag">TECHNICAL · TEAM EVENT</span>
                   <span className="status-badge">
-                    <i /> {ticket.status.replace("_", " ").toUpperCase()}
+                    <i /> {ticketStatus}
                   </span>
                 </div>
-                <h2>{event.title}</h2>
-                <p className="ticket-sub">{event.description}</p>
+                <h2>{event?.title || "Event no longer available"}</h2>
+                <p className="ticket-sub">
+                  {event?.description || "Event details are unavailable."}
+                </p>
                 <div className="ticket-details">
                   <div>
                     <span>DATE & TIME</span>
-                    <b>
-                      {new Date(`${event.date}T00:00:00`).toLocaleDateString()}{" "}
-                      · {event.time}
-                    </b>
+                    <b>{event?.startsAt ? new Date(event.startsAt).toLocaleString() : "Unavailable"}</b>
                   </div>
                   <div>
                     <span>VENUE</span>
-                    <b>{event.venue}</b>
+                    <b>{event?.venue || "Unavailable"}</b>
                   </div>
                   <div>
                     <span>PARTICIPANT</span>
                     <b>{user?.name}</b>
                   </div>
-                  {registration.teamName && <div>
+                  {registration?.teamName && <div>
                     <span>TEAM LEADER</span>
-                    <b>{typeof registration.userId === "object" ? registration.userId.name : user?.name}</b>
+                    <b>{registration.userId && typeof registration.userId === "object" ? registration.userId.name : user?.name}</b>
                   </div>}
-                  <div>
-                    <span>TEAM</span>
-                    <b>
-                      {registration.teamName || "Individual"} ·{" "}
-                      {registration.members.length} member
-                      {registration.members.length === 1 ? "" : "s"}
-                    </b>
-                    {registration.teamName && <small>Members: {registration.members.join(", ")}</small>}
-                  </div>
+                  <div><span>TEAM</span><b>{registration?.teamName || "Individual"} · {registration?.members?.length || 0} member{registration?.members?.length === 1 ? "" : "s"}</b>{registration?.teamName && <small>Members: {registration.members.join(", ")}</small>}</div>
                 </div>
               </div>
               <div className="ticket-stub">
                 <div className="perforation" />
                 <div className="qr-box">
-                  <QRCode
-                    value={ticket.credential}
-                    size={138}
-                    bgColor="#fff"
-                    fgColor="#171c27"
-                  />
+                  {ticketUsable ? <QRCode value={ticket.credential} size={138} bgColor="#fff" fgColor="#171c27" /> : <span role="status">Ticket QR unavailable</span>}
                 </div>
                 <span className="ticket-number">{ticket._id}</span>
                 <small>Present this QR at the entrance</small>
@@ -1700,7 +1935,7 @@ function TicketsPage({ toast }: { toast: (s: string) => void }) {
               <div className="ticket-notch top" />
               <div className="ticket-notch bottom" />
             </div>
-            <div className="ticket-actions">
+            {ticketUsable && <div className="ticket-actions">
               <button
                 className="btn btn-dark"
                 onClick={() => toast("Ticket saved to your device")}
@@ -1713,16 +1948,17 @@ function TicketsPage({ toast }: { toast: (s: string) => void }) {
               >
                 <ExternalLink size={16} /> Share ticket
               </button>
-            </div>
+            </div>}
             <div className="ticket-help">
               <ShieldCheck size={17} />
               <span>
-                <b>Keep your ticket close.</b> This QR code is unique to you and
-                can only be scanned once at entry.
+                <b>{ticketMessage ? "Ticket information" : "Keep your ticket close."}</b>{" "}
+                {ticketMessage || "This QR code is unique to you and can only be scanned once at entry."}
               </span>
             </div>
           </div>
-        ))
+          );
+        })
       )}
     </>
   );
@@ -1748,9 +1984,31 @@ function QuizzesPage({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const active = quizzes.find((q) => q.status === "published") ?? quizzes[0];
+  const eventStartsAt = active?.eventStartsAt
+    ? new Date(active.eventStartsAt).getTime()
+    : Number.NaN;
+  const eventEndsAt = active?.eventEndsAt
+    ? new Date(active.eventEndsAt).getTime()
+    : Number.NaN;
+  const eventStarted = Number.isFinite(eventStartsAt) && eventStartsAt <= now;
+  const eventEnded = Number.isFinite(eventEndsAt) && eventEndsAt <= now;
+  const quizWindowOpen = !active?.endsAt || new Date(active.endsAt).getTime() > now;
+  const canStart = active?.status === "published" &&
+    active.eventStatus === "published" && eventStarted && !eventEnded && quizWindowOpen;
   const [competitionProgress, setCompetitionProgress] = useState<ApiCompetitionProgress | null>(null);
   const serverOffset = useRef(0);
   const finalizedRef = useRef(false);
+  const answerSaveQueue = useRef<Promise<void>>(Promise.resolve());
+  const expiredQuestionRef = useRef("");
+
+  useEffect(() => {
+    if (!active?.eventStartsAt || eventStarted) return;
+    const timeout = window.setTimeout(
+      () => setNow(Date.now()),
+      Math.max(0, eventStartsAt - Date.now()) + 50,
+    );
+    return () => window.clearTimeout(timeout);
+  }, [active?._id, active?.eventStartsAt, eventStarted, eventStartsAt]);
 
   useEffect(() => {
     setCompetitionProgress(null);
@@ -1777,11 +2035,87 @@ function QuizzesPage({
     Math.ceil(Math.min(overallRemainingMs, questionRemainingMs) / 1000),
   );
 
+  useEffect(() => {
+    if (!play || overallRemainingMs <= 0 || questionRemainingMs > 0) return;
+    const index = questionIndex;
+    const key = `${play.attemptId}:${index}`;
+    if (play.finalizedAt[index]) {
+      if (index < play.quiz.questions.length - 1)
+        setQuestionIndex((current) =>
+          current === index ? current + 1 : current,
+        );
+      return;
+    }
+    if (expiredQuestionRef.current === key) return;
+    expiredQuestionRef.current = key;
+    const save = answerSaveQueue.current
+      .catch(() => {})
+      .then(() => api.saveAttemptAnswer(play.attemptId, index, null));
+    answerSaveQueue.current = save.then(
+      () => undefined,
+      () => undefined,
+    );
+    void save
+      .then((result) => {
+        if (!result.locked) {
+          if (result.reason === "still_open") expiredQuestionRef.current = "";
+          return;
+        }
+        setPlay((current) =>
+          current?.attemptId === play.attemptId
+            ? {
+                ...current,
+                finalizedAt: current.finalizedAt.map((value, i) =>
+                  i === index ? result.finalizedAt ?? new Date().toISOString() : value,
+                ),
+              }
+            : current,
+        );
+        if (index < play.quiz.questions.length - 1)
+          setQuestionIndex((current) =>
+            current === index ? current + 1 : current,
+          );
+      })
+      .catch((cause: unknown) => {
+        expiredQuestionRef.current = "";
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not save the timed answer.",
+        );
+      });
+  }, [play?.attemptId, questionIndex, questionRemainingMs <= 0, overallRemainingMs <= 0, now]);
+
   const applySnapshot = (snapshot: import("./api").ApiAttemptSnapshot) => {
     serverOffset.current = new Date(snapshot.serverTime).getTime() - Date.now();
     setNow(Date.now());
     setPlay(snapshot);
   };
+
+  useEffect(() => {
+    if (!active) return;
+    let current = true;
+    void api.myQuizAttempt(active._id).then(async (snapshot) => {
+      if (!current || !snapshot) return;
+      if (snapshot.status === "completed") {
+        setPlay(null);
+        setFinished({ scoreRevealed: false, score: null, total: null });
+        try {
+          const result = await api.myQuizResult(active._id);
+          if (current)
+            setFinished({ scoreRevealed: true, score: result.score, total: result.total });
+        } catch {
+          // Results remain hidden until the organizer publishes them.
+        }
+        return;
+      }
+      applySnapshot(snapshot);
+      setQuestionIndex(Math.max(0, snapshot.finalizedAt.findIndex((value) => !value)));
+    }).catch(() => {
+      if (current) setError("Could not check your saved quiz attempt. Please refresh and try again.");
+    });
+    return () => { current = false; };
+  }, [active?._id]);
 
   const loadResult = async (quizId: string) => {
     try {
@@ -1797,34 +2131,11 @@ function QuizzesPage({
     }
   };
 
-  // restore an in-progress attempt when mounting (page refresh safety)
-  useEffect(() => {
-    if (!active) return;
-    let cancelled = false;
-    void api
-      .startQuiz(active._id)
-      .then((snapshot) => {
-        if (cancelled) return;
-        if (snapshot.resumed) {
-          applySnapshot(snapshot);
-          if (snapshot.answers.length > 0) setQuestionIndex(0);
-        } else if (snapshot.status === "completed") {
-          void loadResult(active._id);
-        }
-      })
-      .catch(() => {
-        /* no attempt / quiz not open — user can still press Start */
-      });
-    return () => {
-      cancelled = true;
-    };
-    // resume-on-mount: intentionally runs only once
-  }, []);
-
   const finalize = async (attemptId: string) => {
     if (finalizedRef.current) return;
     finalizedRef.current = true;
     try {
+      await answerSaveQueue.current.catch(() => {});
       const outcome = await api.finishAttempt(attemptId);
       setPlay(null);
       if (outcome.scoreRevealed) {
@@ -1852,14 +2163,27 @@ function QuizzesPage({
   }, [play, overallRemainingMs <= 0]);
 
   const saveAnswer = async (index: number, answer: number) => {
-    if (!play) return;
-    setPlay({
-      ...play,
-      answers: play.answers.map((a, i) => (i === index ? answer : a)),
-    });
+    if (!play || play.finalizedAt[index] || questionRemainingMs <= 0) return;
+    setPlay((current) =>
+      current
+        ? {
+            ...current,
+            answers: current.answers.map((value, i) =>
+              i === index ? answer : value,
+            ),
+          }
+        : current,
+    );
     setError("");
     try {
-      const res = await api.saveAttemptAnswer(play.attemptId, index, answer);
+      const save = answerSaveQueue.current
+        .catch(() => {})
+        .then(() => api.saveAttemptAnswer(play.attemptId, index, answer));
+      answerSaveQueue.current = save.then(
+        () => undefined,
+        () => undefined,
+      );
+      const res = await save;
       if (res.locked) {
         setError(
           `That question was locked before your answer saved (${res.reason ?? "too late"}).`,
@@ -1877,13 +2201,21 @@ function QuizzesPage({
   };
 
   const start = async () => {
-    if (!active || busy) return;
+    if (!active || busy || !canStart) return;
     setBusy(true);
     setError("");
     setFinished(null);
     finalizedRef.current = false;
+    expiredQuestionRef.current = "";
     try {
       const snapshot = await api.startQuiz(active._id);
+      if (snapshot.status === "completed") {
+        setPlay(null);
+        setFinished({ scoreRevealed: false, score: null, total: null });
+        await loadResult(active._id);
+        toast("You already submitted this quiz. Your attempt cannot be restarted.");
+        return;
+      }
       applySnapshot(snapshot);
       setQuestionIndex(0);
       if (snapshot.endedByAdmin)
@@ -2003,6 +2335,10 @@ function QuizzesPage({
                   {question.options.map((option, index) => (
                     <button
                       key={option}
+                      disabled={
+                        questionRemainingMs <= 0 ||
+                        Boolean(play.finalizedAt[questionIndex])
+                      }
                       className={
                         chosenAnswers[questionIndex] === index ? "chosen" : ""
                       }
@@ -2052,16 +2388,39 @@ function QuizzesPage({
             ) : (
               <button
                 className="btn btn-dark"
-                disabled={busy || active?.status !== "published"}
+                disabled={busy || !canStart}
                 onClick={() => void start()}
               >
                 {busy
                   ? "Starting…"
-                  : active?.status === "published"
-                    ? "Start the quiz"
-                    : "Quiz window closed"}{" "}
+                  : active?.status !== "published"
+                    ? "Quiz window closed"
+                    : active.eventStatus !== "published"
+                      ? "Event unavailable"
+                      : !Number.isFinite(eventStartsAt)
+                        ? "Event schedule unavailable"
+                        : !eventStarted
+                      ? "Available when event starts"
+                      : eventEnded
+                        ? "Event ended"
+                        : active.eventStatus !== "published"
+                          ? "Event unavailable"
+                          : !quizWindowOpen
+                            ? "Quiz window closed"
+                            : "Start the quiz"}{" "}
                 <ArrowRight size={16} />
               </button>
+            )}
+            {active?.status === "published" && !eventStarted && active.eventStartsAt && (
+              <p role="status">
+                This quiz opens when the event starts on {new Date(active.eventStartsAt).toLocaleString()}.
+              </p>
+            )}
+            {active?.status === "published" && active.eventStatus !== "published" && (
+              <p role="status">This event is not available for quiz attempts.</p>
+            )}
+            {active?.status === "published" && !Number.isFinite(eventStartsAt) && (
+              <p role="status">The event schedule is unavailable. Please contact the organizers.</p>
             )}
           </div>
         </div>
@@ -2071,132 +2430,112 @@ function QuizzesPage({
 }
 
 function LeaderboardPage() {
-  const [rows, setRows] = useState<Rank[]>([]);
+  const [quizzes, setQuizzes] = useState<ApiQuiz[]>([]);
+  const [quizId, setQuizId] = useState("");
+  const [board, setBoard] = useState<ApiCompetitionLeaderboards | null>(null);
+  const [round, setRound] = useState<"round1" | "round2" | "final">("round1");
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  const [pendingResults, setPendingResults] = useState(false);
   const { user } = useAuth();
   useEffect(() => {
-    void api
-      .quizzes()
-      .then(async (quizzes) => {
-        const quiz =
-          quizzes.find((q) => q.status === "published") ?? quizzes[0];
-        if (!quiz) return [];
-        try {
-          return await api.leaderboard(quiz._id);
-        } catch (cause) {
-          // Feature 3: results stay hidden until an admin publishes them.
-          if (
-            cause instanceof ApiError &&
-            cause.code === "RESULTS_NOT_PUBLISHED"
-          ) {
-            setPendingResults(true);
-            return [];
-          }
-          throw cause;
-        }
-      })
-      .then((result) =>
-        setRows(
-          result.map((row) => ({
-            ...row,
-            timeTaken: new Date(row.submittedAt).toLocaleTimeString(),
-          })),
-        ),
-      )
-      .catch((cause: unknown) =>
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : "Could not load leaderboard.",
-        ),
-      );
+    let current = true;
+    void api.quizzes().then((items) => {
+      if (!current) return;
+      setQuizzes(items);
+      setQuizId(items.find((quiz) => quiz.status === "published")?._id ?? items[0]?._id ?? "");
+    }).catch((cause: unknown) => {
+      if (current) setError(cause instanceof Error ? cause.message : "Could not load quizzes.");
+    }).finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
   }, []);
+  useEffect(() => {
+    if (!quizId) { setBoard(null); return; }
+    let current = true;
+    setLoading(true);
+    setError("");
+    void api.competitionLeaderboards(quizId).then((result) => {
+      if (current) setBoard(result);
+    }).catch((cause: unknown) => {
+      if (current) setError(cause instanceof Error ? cause.message : "Could not load leaderboards.");
+    }).finally(() => { if (current) setLoading(false); });
+    return () => { current = false; };
+  }, [quizId]);
+  const roundBoard = board?.[round];
+  const rows = roundBoard?.rankings ?? [];
+  const roundLabel = round === "round1" ? "Round 1" : round === "round2" ? "Round 2" : "Final results";
   return (
     <>
       <PageHead
         eyebrow="FRIENDLY COMPETITION"
-        title="Leaderboard"
-        description="A little healthy competition never hurt. Keep climbing."
-        action={
-          <button className="btn btn-outline">
-            <CalendarDays size={15} /> This week <ChevronDown size={14} />
-          </button>
-        }
+        title="Leaderboards"
+        description="Track published rankings across all three quiz rounds."
       />
       <div className="leaderboard-shell">
-        {rows.length > 0 && (
+        {quizzes.length > 1 && <label className="leaderboard-quiz-select">Quiz<select value={quizId} onChange={(event) => { setQuizId(event.target.value); setRound("round1"); }}>
+          {quizzes.map((quiz) => <option key={quiz._id} value={quiz._id}>{quiz.title}</option>)}
+        </select></label>}
+        <div className="leaderboard-round-tabs" role="tablist" aria-label="Quiz round leaderboards">
+          {([["round1", "Round 1"], ["round2", "Round 2"], ["final", "Final results"]] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={round === key} className={round === key ? "active" : ""} onClick={() => setRound(key)}>{label}</button>)}
+        </div>
+        {board && <div className="leaderboard-round-title"><h2>{board.quiz.title} · {roundLabel}</h2><span>{roundBoard?.published ? `Published ${roundBoard.publishedAt ? new Date(roundBoard.publishedAt).toLocaleDateString() : ""}` : "Not published yet"}</span></div>}
+        {round === "final" && roundBoard?.published && board?.final.winner && <div className="leaderboard-winner" role="status"><Trophy size={20} /><span><b>Winner: {board.final.winner.userName}</b><small>Confirmed by the organizers</small></span></div>}
+        {round === "final" && roundBoard?.published && !board?.final.winner && <p className="leaderboard-pending"><Clock3 size={15} /> Final rankings are published; the winner has not been confirmed yet.</p>}
+        {loading && <p className="leaderboard-pending" role="status">Loading leaderboard…</p>}
+        {!loading && !quizzes.length && <p className="leaderboard-pending">No quiz leaderboards are available for your registered events yet.</p>}
+        {!loading && !!quizId && roundBoard && !roundBoard.published && <p className="leaderboard-pending"><Clock3 size={15} /> {roundLabel} rankings will appear after the organizers publish them.</p>}
+        {!loading && roundBoard?.published && rows.length > 0 && (
           <div className="podium">
             {[rows[1], rows[0], rows[2]]
-              .filter((row): row is Rank => !!row)
+              .filter((row): row is NonNullable<typeof row> => !!row)
               .map((row, index) => (
                 <Podium
                   key={row.rank}
                   user={row.userName}
-                  score={String(row.score)}
+                  score={row.score == null ? "—" : String(row.score)}
                   place={index === 0 ? 2 : index === 1 ? 1 : 3}
-                  img={`https://i.pravatar.cc/100?u=${encodeURIComponent(row.userName)}`}
+                  img={row.avatar || `https://i.pravatar.cc/100?u=${encodeURIComponent(row.userName)}`}
                 />
               ))}
           </div>
         )}
-        <div className="rank-table">
+        {!loading && roundBoard?.published && rows.length > 0 && <div className="rank-table round-rank-table">
           <div className="rank-header">
             <span>RANK</span>
             <span>PARTICIPANT</span>
-            <span>SCORE</span>
-            <span>TIME</span>
-            <span>TREND</span>
+            <span>POINTS</span>
+            <span>SUBMITTED</span>
           </div>
-          {rows.map((r, i) => (
+          {rows.map((r) => (
             <div
-              className={`rank-row ${r.userName === user?.name ? "you" : ""}`}
-              key={r.rank}
+              className={`rank-row ${r.userId === user?.id ? "you" : ""}`}
+              key={r.userId}
             >
               <b className="rank-num">{String(r.rank).padStart(2, "0")}</b>
               <div className="rank-person">
-                <img
-                  src={`https://i.pravatar.cc/80?u=${encodeURIComponent(r.userName)}`}
-                />
+                {r.avatar && <img src={r.avatar} alt="" />}
                 <b>
                   {r.userName}
-                  {r.userName === user?.name && <small>YOU</small>}
+                  {r.userId === user?.id && <small>YOU</small>}
                 </b>
               </div>
               <b className="rank-score">
-                {r.score.toLocaleString()} <small>pts</small>
+                {r.score == null ? "—" : <>{r.score.toLocaleString()} <small>pts</small></>}
               </b>
-              <span className="rank-time">{r.timeTaken}</span>
-              <span className="rank-trend">
-                {i < 3 ? (
-                  <ArrowUpRight size={16} />
-                ) : (
-                  <ArrowDownRight size={16} />
-                )}
-              </span>
+              <span className="rank-time">{r.submittedAt ? new Date(r.submittedAt).toLocaleDateString() : "—"}</span>
             </div>
           ))}
-        </div>
+        </div>}
         {error && (
           <p className="auth-error" role="alert">
             {error}
           </p>
         )}
-        {pendingResults && (
-          <p className="leaderboard-pending">
-            <Clock3 size={15} /> Results haven&apos;t been published yet. The
-            leaderboard unlocks as soon as the organizers announce scores —
-            watch for a notification!
-          </p>
-        )}
-        {!rows.length && !error && !pendingResults && (
-          <p>No quiz scores have been submitted yet.</p>
-        )}
+        {!loading && roundBoard?.published && !rows.length && <p className="leaderboard-pending">No ranked participants are recorded for this round.</p>}
         <div className="leader-foot">
           <span>
-            <span className="live-dot" /> Updated just now
+            {roundBoard?.published ? "Official published results" : "Results are released by the organizers"}
           </span>
-          <span>Scoring resets in 4 days</span>
+          <span>{round === "final" && board?.final.winner ? "Winner confirmed" : roundLabel}</span>
         </div>
       </div>
     </>
@@ -2216,7 +2555,7 @@ function Podium({
   return (
     <div className={`podium-person place-${place}`}>
       <div className="podium-avatar">
-        <img src={img} />
+        {img && <img src={img} alt="" />}
         {place === 1 && <span>✦</span>}
       </div>
       <b>{user}</b>
@@ -3530,7 +3869,9 @@ function Participants() {
     const person =
       typeof row.userId === "string"
         ? row.userId
-        : `${row.userId.name} ${row.userId.email}`;
+        : row.userId
+          ? `${row.userId.name} ${row.userId.email}`
+          : "Deleted user";
     return `${person} ${row.teamName || ""}`
       .toLowerCase()
       .includes(query.toLowerCase());
@@ -3542,7 +3883,7 @@ function Participants() {
         const user =
           typeof row.userId === "string"
             ? { name: row.userId, email: "" }
-            : row.userId;
+            : row.userId ?? { name: "Deleted user", email: "" };
         const quote = (value: string) => `"${value.replace(/"/g, '""')}"`;
         return [
           user.name,
@@ -3643,7 +3984,7 @@ function Participants() {
             const person =
               typeof row.userId === "string"
                 ? { name: row.userId, email: "" }
-                : row.userId;
+                : row.userId ?? { name: "Deleted user", email: "" };
             const event = events.find((item) => item.id === row.eventId);
             return (
               <div className="participant-row" key={row._id}>
@@ -4213,8 +4554,6 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
   const [round2Draft, setRound2Draft] = useState<ApiCompetitionRank[]>([]);
   const [round3Draft, setRound3Draft] = useState<ApiCompetitionRank[]>([]);
   const [advancementLimit, setAdvancementLimit] = useState(3);
-  const [winnerTemplates, setWinnerTemplates] = useState<ApiCertificateTemplate[]>([]);
-  const [winnerTemplateId, setWinnerTemplateId] = useState("");
   const [correctionRound, setCorrectionRound] = useState<0 | 1 | 2 | 3>(0);
   const [correctionReason, setCorrectionReason] = useState("");
   const refresh = () => {
@@ -4237,8 +4576,9 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
   ) => {
     setBusyId(quiz.id);
     void action()
-      .then(() => {
-        toast(done);
+      .then((result) => {
+        const email = (result as { email?: { sent: number; failed: number } } | null)?.email;
+        toast(email ? `${done}. Email delivery: ${email.sent} sent, ${email.failed} failed.` : done);
         refresh();
       })
       .catch((cause: unknown) =>
@@ -4260,12 +4600,9 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
   };
   const openCompetition = (quiz: ApiAdminQuiz) => {
     setBusyId(quiz.id);
-    void Promise.all([api.competition(quiz.id), api.certificateTemplates()]).then(([state, templates]) => {
+    void api.competition(quiz.id).then((state) => {
       setCompetitionFor(quiz);
       setCompetition(state);
-      const matchingTemplates = templates.filter((template) => template.eventId === quiz.eventId);
-      setWinnerTemplates(matchingTemplates);
-      setWinnerTemplateId(matchingTemplates[0]?._id || "");
       setQualifiedIds(state.qualifiedParticipants.length ? state.qualifiedParticipants.map((row) => row.userId) : []);
       setRound2Draft(state.round2Rankings || []);
       setRound3Draft(state.round3Rankings || []);
@@ -4287,10 +4624,23 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
   const compAction = (action: () => Promise<unknown>, message: string) => {
     if (!competitionFor) return;
     setBusyId(competitionFor.id);
-    void action().then(async () => { await reloadCompetition(); setCorrectionRound(0); setCorrectionReason(""); toast(message); })
+    void action().then(async (result) => {
+      await reloadCompetition();
+      setCorrectionRound(0);
+      setCorrectionReason("");
+      const email = (result as { email?: { sent: number; failed: number } } | null)?.email;
+      toast(email ? `${message}. Email delivery: ${email.sent} sent, ${email.failed} failed.` : message);
+    })
       .catch((cause: unknown) => toast(cause instanceof Error ? cause.message : "Competition update failed."))
       .finally(() => setBusyId(""));
   };
+  const round2Eligible = competition?.qualifiedParticipants.map((row) => row.userId) ?? [];
+  const round2Ready = round2Eligible.length > 0 &&
+    round2Draft.length === round2Eligible.length &&
+    new Set(round2Draft.map((row) => row.userId)).size === round2Eligible.length &&
+    new Set(round2Draft.map((row) => row.rank)).size === round2Eligible.length &&
+    round2Eligible.every((id) => round2Draft.some((row) => row.userId === id)) &&
+    round2Draft.every((row) => Number.isInteger(row.rank) && row.rank >= 1 && row.rank <= round2Eligible.length);
   return (
     <>
       <PageHead
@@ -4475,7 +4825,8 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
               <button className="btn btn-outline" onClick={() => setRound2Draft((old) => [...old, { userId: "", rank: old.length + 1 }])}>Add participant</button>
               <label>Advance to Round 3<input type="number" min={1} max={10} value={advancementLimit} onChange={(e) => setAdvancementLimit(Number(e.target.value))} /><small>Top {advancementLimit} Round 2 ranks advance.</small></label>
               <button className="btn btn-outline" disabled={!!busyId || !round2Draft.length || round2Draft.some((row) => !row.userId)} onClick={() => compAction(() => api.saveRound2(competitionFor.id, round2Draft, advancementLimit), "Round 2 draft saved")}>Save Round 2 draft</button>
-              <button className="btn btn-dark" disabled={!!busyId} onClick={() => { if (window.confirm("Publish Round 2 rankings?")) compAction(() => api.publishRound2(competitionFor.id), "Round 2 published"); }}>Publish Round 2</button>
+              {!round2Ready && <p role="status">Add every one of the {round2Eligible.length} qualified participants and assign each a unique rank before publishing.</p>}
+              <button className="btn btn-dark" disabled={!!busyId || !round2Ready} onClick={() => { if (window.confirm("Save and publish the complete Round 2 rankings?")) compAction(async () => { await api.saveRound2(competitionFor.id, round2Draft, advancementLimit); return api.publishRound2(competitionFor.id); }, "Round 2 published"); }}>Publish Round 2</button>
             </>}
             {correctionRound === 2 && <><label>Correction reason<textarea value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} maxLength={500} /></label><button className="btn btn-dark" disabled={!!busyId || !correctionReason.trim()} onClick={() => compAction(() => api.correctRound2(competitionFor.id, round2Draft, correctionReason), "Round 2 correction saved")}>Save audited correction</button></>}
           </>}
@@ -4496,28 +4847,37 @@ function QuizManager({ toast }: { toast: (s: string) => void }) {
             {correctionRound === 3 && <><label>Correction reason<textarea value={correctionReason} onChange={(e) => setCorrectionReason(e.target.value)} maxLength={500} /></label><button className="btn btn-dark" disabled={!!busyId || !correctionReason.trim()} onClick={() => compAction(() => api.correctRound3(competitionFor.id, round3Draft, correctionReason), "Final ranking correction saved")}>Save audited correction</button></>}
           </>}
           {competition.round3PublishedAt && !competition.winnerConfirmedAt && <button className="btn btn-dark" disabled={!!busyId} onClick={() => { if (window.confirm("Confirm the first-ranked participant as the winner?")) compAction(() => api.confirmCompetitionWinner(competitionFor.id), "Winner confirmed"); }}>Confirm winner</button>}
-          {competition.winnerConfirmedAt && <p role="status">Winner confirmed: {competition.round3Rankings.find((row) => row.userId === competition.winnerUserId)?.participant?.name || "participant"}</p>}
-          {competition.winnerConfirmedAt && !competition.winnerCertificate && <>
-            <h3>Winner certificate</h3>
-            <p>Choose a certificate template for {competition.round3Rankings.find((row) => row.userId === competition.winnerUserId)?.participant?.name || "the winner"}. A published winner certificate becomes available in that participant&apos;s certificate list.</p>
-            <label>Source template<select value={winnerTemplateId} onChange={(e) => setWinnerTemplateId(e.target.value)}><option value="">Choose a template</option>{winnerTemplates.map((template) => <option key={template._id} value={template._id}>{template.title} · {template.status}</option>)}</select></label>
-            <button className="btn btn-dark" disabled={!!busyId || !winnerTemplateId} onClick={() => { if (window.confirm("Issue and publish this winner certificate?")) compAction(() => api.publishWinnerCertificate(competitionFor.id, winnerTemplateId), "Winner certificate published"); }}>Publish winner certificate</button>
+          {competition.winnerConfirmedAt && <>
+            <p role="status">Winner confirmed: {competition.round3Rankings.find((row) => row.userId === competition.winnerUserId)?.participant?.name || "participant"}</p>
+            <button className="btn btn-outline" disabled={!!busyId} onClick={() => compAction(() => api.confirmCompetitionWinner(competitionFor.id), "Winner announcement re-sent")}>Re-send winner announcement</button>
           </>}
-          {competition.winnerCertificate && <p role="status">Winner certificate published · {competition.winnerCertificate.certificateId}</p>}
+          {competition.round3PublishedAt && <p role="status">Final results are published. Create and publish top-three achievement certificates from the Certificates section.</p>}
         </Modal>
       )}
     </>
   );
 }
 
-function StudentCertificates() {
-  const [certificates, setCertificates] = useState<ApiCertificate[] | null>(
-    null,
-  );
+function PublicCertificateVerification() {
+  const { certificateId: routeId } = useParams();
+  const navigate = useNavigate();
+  const [value, setValue] = useState(routeId || "");
+  const [result, setResult] = useState<Awaited<ReturnType<typeof api.verifyCertificate>> | null>(null);
   const [error, setError] = useState("");
-  const [downloading, setDownloading] = useState("");
-  const [viewing, setViewing] = useState<{ url: string; title: string } | null>(null);
-  useEffect(() => () => { if (viewing?.url) URL.revokeObjectURL(viewing.url); }, [viewing?.url]);
+  const [loading, setLoading] = useState(false);
+  useEffect(() => {
+    setValue(routeId || "");
+    if (!routeId) { setResult(null); return; }
+    setLoading(true); setError("");
+    void api.verifyCertificate(routeId).then(setResult).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Certificate could not be verified.")).finally(() => setLoading(false));
+  }, [routeId]);
+  return <main className="auth-page"><section className="auth-card"><div className="eyebrow">CERTIFICATE REGISTRY</div><h1>Verify a certificate</h1><form onSubmit={(event) => { event.preventDefault(); const id = value.trim(); if (id) navigate(`/certificate/verify/${encodeURIComponent(id)}`); }}><label className="field-label">CERTIFICATE ID<input value={value} onChange={(event) => setValue(event.target.value)} required maxLength={64} /></label><button className="btn btn-dark" disabled={loading}>{loading ? "Checking…" : "Verify certificate"}</button></form>{error && <p role="alert" className="auth-error">{error}</p>}{result && <section role="status"><h2>{result.valid ? "Valid certificate" : result.status === "unpublished" ? "Not published" : "Certificate is not valid"}</h2>{result.valid && <><p>{result.recipientName} · {result.eventName}</p><p>{result.certificateType === "winner" ? result.awardPosition : "Certificate of Participation"}</p><p>Issued {result.issuedAt ? new Date(result.issuedAt).toLocaleDateString() : ""}</p></>}</section>}</section></main>;
+}
+
+function StudentCertificates({ festName }: { festName: string }) {
+  const [certificates, setCertificates] = useState<ApiCertificate[] | null>(null);
+  const [error, setError] = useState("");
+  const [viewing, setViewing] = useState<ApiCertificate | null>(null);
   useEffect(() => {
     void api
       .myCertificates()
@@ -4551,11 +4911,13 @@ function StudentCertificates() {
   }
   return (
     <div className="certificate-list">
-      {certificates.map((certificate) => {
+      {(["participation", "winner"] as const).map((kind) => <section key={kind}><h3>{kind === "winner" ? "Achievement certificates" : "Participation certificates"}</h3>{certificates.filter((row) => (row.awardType || "participation") === kind).map((certificate) => {
         const template =
           typeof certificate.templateId === "object"
             ? certificate.templateId
             : null;
+        const event = typeof certificate.eventId === "object" ? certificate.eventId : null;
+        const pdf = <CertificatePdf certificate={{ ...certificate, title: template?.title, description: template?.description, signatureName: template?.signatureName, signatureRole: template?.signatureRole, logoUrl: template?.logoUrl, signatureImageUrl: template?.signatureImageUrl }} eventName={event?.title || "Fest Event"} eventDate={event?.endsAt} festName={festName} verificationUrl={`${window.location.origin}/certificate/verify/${certificate.certificateId}`} />;
         return (
           <div
             key={certificate._id}
@@ -4565,58 +4927,16 @@ function StudentCertificates() {
             <div>
               <b>{template?.title ?? "Participation certificate"}</b>
               <small>
-                {certificate.certificateId} · issued{" "}
+                {event?.title || "Fest event"} · {certificate.rank ? `Rank ${certificate.rank} · ` : ""}{certificate.certificateId} · issued{" "}
                 {new Date(certificate.issuedAt).toLocaleDateString()}
               </small>
             </div>
-            <button
-              className="btn btn-outline"
-              disabled={downloading === certificate._id}
-              onClick={() => {
-                setDownloading(certificate._id);
-                void api
-                  .downloadCertificate(certificate._id)
-                  .then((blob) => {
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement("a");
-                    link.href = url;
-                    link.download = `${certificate.certificateId}.pdf`;
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
-                    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-                  })
-                  .catch((cause: unknown) =>
-                    setError(
-                      cause instanceof Error
-                        ? cause.message
-                        : "Could not download certificate.",
-                    ),
-                  )
-                  .finally(() => setDownloading(""));
-              }}
-            >
-              <Download size={15} />{" "}
-              {downloading === certificate._id ? "Downloading…" : "Download"}
-            </button>
-            <button
-              className="btn btn-outline"
-              disabled={downloading === certificate._id}
-              onClick={() => {
-                setDownloading(certificate._id);
-                void api.downloadCertificate(certificate._id)
-                  .then((blob) => {
-                    const url = URL.createObjectURL(blob);
-                    setViewing({ url, title: template?.title ?? "Certificate" });
-                  })
-                  .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "Could not open certificate."))
-                  .finally(() => setDownloading(""));
-              }}
-            >View</button>
+            <PDFDownloadLink className="btn btn-outline" document={pdf} fileName={`${certificate.certificateId}.pdf`}>{({ loading, error: pdfError }) => <><Download size={15} /> {pdfError ? "PDF error" : loading ? "Preparing…" : "Download PDF"}</>}</PDFDownloadLink>
+            <button className="btn btn-outline" onClick={() => setViewing(certificate)}>Preview</button>
           </div>
         );
-      })}
-      {viewing && <Modal title={viewing.title} close={() => setViewing(null)}><iframe title={viewing.title} src={viewing.url} style={{ width: "min(80vw, 900px)", height: "70vh", border: 0 }} /></Modal>}
+      })}</section>)}
+      {viewing && <Modal title={typeof viewing.templateId === "object" ? viewing.templateId.title : "Certificate"} close={() => setViewing(null)}><PDFViewer style={{ width: "min(80vw, 900px)", height: "70vh" }}><CertificatePdf certificate={{ ...viewing, ...(typeof viewing.templateId === "object" ? viewing.templateId : {}) }} eventName={typeof viewing.eventId === "object" ? viewing.eventId.title : "Fest Event"} eventDate={typeof viewing.eventId === "object" ? viewing.eventId.endsAt : undefined} festName={festName} verificationUrl={`${window.location.origin}/certificate/verify/${viewing.certificateId}`} /></PDFViewer></Modal>}
     </div>
   );
 }
@@ -4712,8 +5032,8 @@ function Announcement({ toast }: { toast: (s: string) => void }) {
               setSending(true);
               void api
                 .announce(title.trim(), message.trim(), target)
-                .then(({ delivered }) => {
-                  toast(`Announcement sent to ${delivered} accounts`);
+                .then(({ delivered, email }) => {
+                  toast(`Announcement sent to ${delivered} accounts · email sent to ${email.sent}${email.failed ? `, failed for ${email.failed}` : ""}`);
                   setTitle("");
                   setMessage("");
                 })

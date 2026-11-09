@@ -3,13 +3,15 @@ import {
   forgotPassword,
   logout,
   refresh,
+  requestSignupOtp,
   resetPassword,
   signIn,
-  signup,
+  verifySignupOtp,
 } from "./auth.controller.js";
 
 export const publicAuthRoutes = Router();
-publicAuthRoutes.post("/signup", signup);
+publicAuthRoutes.post("/signup/request-otp", requestSignupOtp);
+publicAuthRoutes.post("/signup/verify-otp", verifySignupOtp);
 publicAuthRoutes.post("/login", signIn);
 publicAuthRoutes.post("/refresh", refresh);
 publicAuthRoutes.post("/logout", logout);

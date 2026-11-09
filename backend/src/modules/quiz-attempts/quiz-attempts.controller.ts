@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   beginAttempt,
   finalizeAttempt,
+  getMyQuizAttempt,
   getAttemptState,
   saveQuestionAnswer,
   scoreAttempt,
@@ -22,6 +23,13 @@ export const startQuizAttempt = asyncRoute(async (req, res) =>
     res,
     await beginAttempt(parseBody(objectId, req.params.quizId), req.principal!.id),
     201,
+  ),
+);
+
+export const myQuizAttempt = asyncRoute(async (req, res) =>
+  success(
+    res,
+    await getMyQuizAttempt(parseBody(objectId, req.params.quizId), req.principal!.id),
   ),
 );
 

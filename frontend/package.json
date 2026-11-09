@@ -8,9 +8,11 @@
     "build": "tsc -b && vite build",
     "lint": "eslint src",
     "preview": "vite preview",
-    "test:scanner": "node --experimental-strip-types src/ticketValidation.test.ts"
+    "test:scanner": "node --experimental-strip-types src/ticketValidation.test.ts",
+    "test:certificate-pdf": "node --import ../backend/node_modules/tsx/dist/loader.mjs src/certificatePdf.smoke.tsx"
   },
   "dependencies": {
+    "@react-pdf/renderer": "^4.9.0",
     "@vitejs/plugin-react": "latest",
     "html5-qrcode": "latest",
     "lucide-react": "latest",

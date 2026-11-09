@@ -1,7 +1,7 @@
 import { fail } from "../../common/errors/app-error.js";
 import { recordAudit } from "../../common/utils/audit.js";
-import { emitUserNotification } from "../../sockets/socket-server.js";
-import { Event, Notification, Quiz, QuizAttempt, Registration } from "../models.js";
+import { announceEventToRegistrants } from "../notifications/notifications.service.js";
+import { Event, Quiz, QuizAttempt, Registration } from "../models.js";
 import type { z } from "zod";
 import type { quizInput, quizUpdateInput } from "./quizzes.validator.js";
 
@@ -56,18 +56,32 @@ export async function getPublishedQuizzes(userId: string, role: "student" | "adm
     await Quiz.find({
       status: { $in: ["published", "closed"] },
       ...(eligibleEventIds ? { eventId: { $in: eligibleEventIds } } : {}),
-    }).lean()
-  ).map((quiz) => ({
-    ...quiz,
-    // Keep closed quizzes visible so participants can track published progress.
-    endsAt: quiz.endsAt ?? null,
-    resultsPublishedAt: quiz.resultsPublishedAt ?? null,
-    questions: quiz.questions.map(({ text, options }, index) => ({
-      id: String(index),
-      text,
-      options,
-    })),
-  }));
+    })
+      .populate("eventId", "startsAt endsAt status")
+      .lean()
+  ).map((quiz) => {
+    const event = quiz.eventId as unknown as {
+      _id?: unknown;
+      startsAt?: Date;
+      endsAt?: Date;
+      status?: string;
+    } | null;
+    return {
+      ...quiz,
+      eventId: String(event?._id ?? quiz.eventId),
+      eventStartsAt: event?.startsAt ?? null,
+      eventEndsAt: event?.endsAt ?? null,
+      eventStatus: event?.status ?? null,
+      // Keep closed quizzes visible so participants can track published progress.
+      endsAt: quiz.endsAt ?? null,
+      resultsPublishedAt: quiz.resultsPublishedAt ?? null,
+      questions: quiz.questions.map(({ text, options }, index) => ({
+        id: String(index),
+        text,
+        options,
+      })),
+    };
+  });
 }
 
 export async function addQuiz(adminId: string, input: QuizInput) {
@@ -314,23 +328,18 @@ export async function announceQuizResults(adminId: string, id: string) {
       "RESULTS_NOT_PUBLISHED",
       "Publish the results before announcing them",
     );
-  if (quiz.resultsAnnouncedAt) return { delivered: 0, alreadyAnnounced: true };
-  const recipients = await Registration.find({
-    eventId: quiz.eventId,
-    status: "confirmed",
-  })
-    .select("userId")
-    .lean();
-  const userIds = [...new Set(recipients.map((row) => String(row.userId)))];
   const publishedAt = quiz.resultsPublishedAt;
-  const notifications = await Notification.insertMany(
-    userIds.map((userId) => ({
-      userId,
-      type: "result",
-      title: `Results are out: ${quiz.title}`,
-      message: `Quiz results were published on ${publishedAt.toLocaleString()}. Open your result and the leaderboard to see where you placed.`,
-    })),
-  );
+  const title = `Results are out: ${quiz.title}`;
+  const message = `Quiz results were published on ${publishedAt.toLocaleString()}. Open your result and the leaderboard to see where you placed.`;
+  if (quiz.resultsAnnouncedAt) {
+    const { email } = await announceEventToRegistrants(
+      String(quiz.eventId),
+      title,
+      message,
+      false,
+    );
+    return { delivered: 0, alreadyAnnounced: true, email };
+  }
   // Stamp the announcement atomically; a lost race means another request
   // already announced, so nothing is emitted twice.
   const stamped = await Quiz.findOneAndUpdate(
@@ -342,19 +351,19 @@ export async function announceQuizResults(adminId: string, id: string) {
     { $set: { resultsAnnouncedAt: new Date() } },
     { new: true },
   );
-  if (!stamped) {
-    await Notification.deleteMany({
-      _id: { $in: notifications.map((row) => row._id) },
-    });
-    return { delivered: 0, alreadyAnnounced: true };
-  }
-  notifications.forEach((notification) =>
-    emitUserNotification(String(notification.userId), notification.toObject()),
+  if (!stamped)
+    return { delivered: 0, alreadyAnnounced: true, email: { sent: 0, failed: 0 } };
+  const delivery = await announceEventToRegistrants(
+    String(quiz.eventId),
+    title,
+    message,
   );
   await recordAudit(adminId, "quiz.results.announced", "quiz", id, {
-    delivered: userIds.length,
+    delivered: delivery.delivered,
+    emailSent: delivery.email.sent,
+    emailFailed: delivery.email.failed,
   });
-  return { delivered: userIds.length, alreadyAnnounced: false };
+  return { ...delivery, alreadyAnnounced: false };
 }
 
 export async function getMyQuizResult(userId: string, quizId: string) {

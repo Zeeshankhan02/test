@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { api, festDateLabel, useFestDates } from "./api";
+import { api, festDateLabel, festDurationLabel, useFestDates } from "./api";
 import type { Event } from "./types";
 import ThemeToggle from "./ThemeToggle";
 
@@ -28,7 +28,9 @@ export default function LandingPage({
   const [eventError, setEventError] = useState("");
   const festDates = useFestDates();
   const festLabel = festDateLabel(festDates);
+  const festDuration = festDurationLabel(festDates);
   const festName = festDates?.title ?? "YUKTI";
+  const festYear = festDates?.startsAt ? new Date(festDates.startsAt).getFullYear() : null;
   useEffect(() => {
     void api
       .events()
@@ -62,10 +64,10 @@ export default function LandingPage({
       <section className="landing-hero">
         <div className="landing-copy">
           <span className="landing-kicker">
-            <i /> {festName} · {festLabel ?? "OCT 15–17, 2026"}
+            <i /> {festName} · {festLabel ?? "Dates coming soon"}
           </span>
           <h1>
-            Three days.
+            {festDuration ? `${festDuration[0].toUpperCase()}${festDuration.slice(1)}.` : "Fest dates coming soon."}
             <br />
             One <em>big feeling.</em>
           </h1>
@@ -110,8 +112,8 @@ export default function LandingPage({
           <div className="landing-date-card">
             <CalendarDays size={17} />
             <span>
-              <b>{festLabel?.split(",")[0] ?? "OCT 15—17"}</b>
-              <small>Three days on campus</small>
+              <b>{festLabel?.split(",")[0] ?? "Schedule coming soon"}</b>
+              <small>{festDuration ? `${festDuration} on campus` : "Fest dates coming soon"}</small>
             </span>
           </div>
           <div className="landing-fun-card">
@@ -129,7 +131,7 @@ export default function LandingPage({
             <br />
             CAMPUS
             <br />
-            2026
+            {festYear ?? "CAMPUS"}
           </span>
         </div>
         <div className="landing-side-note">
@@ -142,7 +144,7 @@ export default function LandingPage({
         </span>
         <i />
         <span>
-          <b>3</b> days to make yours
+          <b>{festDuration?.split(" ")[0] ?? "—"}</b> {festDuration?.endsWith("s") ? "days" : "day"} to make yours
         </span>
         <i />
         <span>
@@ -258,7 +260,7 @@ export default function LandingPage({
           Explore the fest <ArrowRight size={17} />
         </Link>
         <span className="landing-final-mark">
-          <Check size={18} /> {festLabel ?? "OCTOBER 15—17"} · {festName}
+          <Check size={18} /> {festLabel ?? "Dates coming soon"}{festDuration ? ` · ${festDuration}` : ""} · {festName}
         </span>
       </section>
       <footer className="landing-footer">
@@ -269,7 +271,7 @@ export default function LandingPage({
           FestiQO
         </Link>
         <small>Made for the moments that bring us together.</small>
-        <span>© 2026 YUKTI Fest</span>
+        <span>© {festYear ?? new Date().getFullYear()} {festName} Fest</span>
       </footer>
     </main>
   );
