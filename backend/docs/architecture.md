@@ -2,19 +2,26 @@
 
 ## Repository
 
-The project is a React/Vite/TypeScript client under `frontend/` and an Express 5/Mongoose API under `backend/`. `frontend/src/api.ts` centralizes API calls, access-token handling, refresh-cookie rotation, and Socket.IO notifications. Existing UI markup and styling have been retained while fixture-backed data flows were connected to the API.
+The project is a React/Vite/TypeScript client under `frontend/` and an Express 5/Mongoose API under `backend/`. The frontend keeps route composition in `src/App.tsx`, feature pages under `src/features/`, shared UI in `src/shared/`, and domain API clients under `src/api/services/`. `src/api.ts` is the compatibility facade; `src/api/client.ts` owns access-token handling and refresh-cookie rotation, while `src/api/types.ts` contains API DTOs. Global styles stay in `src/styles/` and load in the order declared by `src/main.tsx` so the existing cascade and theme overrides remain intact.
+
+## Frontend boundaries
+
+- `src/features/<domain>/`: page-level UI grouped by product feature, including auth, events, registrations, tickets, quizzes, leaderboards, volunteers, certificates, notifications, fest configuration, and admin tools.
+- `src/api/services/`: endpoint calls grouped by domain; existing callers keep using the `api` facade and endpoint contracts.
+- `src/shared/`: UI primitives shared across feature pages.
+- `src/styles/`: ordered global base, notification, refinement, and dark-theme styles. The existing CSS cascade is retained rather than split into per-component stylesheets.
 
 ## Backend boundaries
 
 - `src/config/`: validated environment, database, CORS, security headers, logging.
 - `src/common/`: standardized errors/responses, ObjectId/body validation, audit and async helpers.
 - `src/middleware/`: authentication, role authorization, request IDs, CSRF origin checks, not-found and error responses.
-- `src/modules/<domain>/`: thin route declarations, HTTP controllers, Zod validators, and domain services. Services own workflow and Mongoose queries; shared Mongoose schemas and indexes are centralized in `src/modules/models.ts`.
+- `src/modules/<domain>/`: thin route declarations, HTTP controllers, Zod validators, domain services, and domain Mongoose models. `src/modules/models.ts` re-exports models as a compatibility barrel. Services own workflow and Mongoose queries.
 - `src/integrations/email/`: optional SMTP reset email.
 - `src/sockets/`: authenticated, user-private notification delivery.
 - `tests/`, `scripts/`, and `docs/`: security/health checks, admin/credential migration/health utilities, contracts, deployment and operation records.
 
-Routes only declare paths, access middleware, and controller handlers. Controllers parse boundary input and format responses; validators define request schemas; services perform business workflows and database operations. `models.ts` is the persistence schema/index boundary, while services use Mongoose directly, so a separate repository abstraction is intentionally not added.
+Routes only declare paths, access middleware, and controller handlers. Controllers parse boundary input and format responses; validators define request schemas; services perform business workflows and database operations. Domain model files own their persistence schemas and indexes, while services use Mongoose directly, so a separate repository abstraction is intentionally not added.
 
 ## Data and security decisions
 

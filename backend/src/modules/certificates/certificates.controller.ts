@@ -8,12 +8,11 @@ import {
   getEventCertificateStatus,
   getTemplates,
   issueCertificates,
-  listUserCertificates,
-  renderCertificatePdf,
-  publishEventCertificates as publishGeneratedEventCertificates,
+  listUserCertificates,  publishEventCertificates as publishGeneratedEventCertificates,
   revokeIssuedCertificate,
   verifyIssuedCertificate,
 } from "./certificates.service.js";
+import { renderCertificatePdf } from "./certificate-pdf.service.js";
 import {
   certificateIdentifier,
   certificateTemplateInput,

@@ -2,10 +2,10 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
-import "./index.css";
-import "./notifications.css";
-import "./refinements.css";
-import "./theme.css";
+import "./styles/index.css";
+import "./styles/notifications.css";
+import "./styles/refinements.css";
+import "./styles/theme.css";
 import { AuthProvider } from "./AuthContext";
 import { ThemeProvider } from "./ThemeContext";
 
@@ -18,5 +18,5 @@ createRoot(document.getElementById("root")!).render(
         </BrowserRouter>
       </AuthProvider>
     </ThemeProvider>
-  </React.StrictMode>
+  </React.StrictMode>,
 );
