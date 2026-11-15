@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+const production = process.env.NODE_ENV === "production";
+
 const optionalString = z.preprocess(
   (value) => (value === "" ? undefined : value),
   z.string().optional(),
@@ -51,9 +53,11 @@ const schema = z
     ),
     COOKIE_SECURE: z
       .enum(["true", "false"])
-      .default("false")
+      .default(production ? "true" : "false")
       .transform((v) => v === "true"),
-    COOKIE_SAME_SITE: z.enum(["strict", "lax", "none"]).default("lax"),
+    COOKIE_SAME_SITE: z
+      .enum(["strict", "lax", "none"])
+      .default(production ? "none" : "lax"),
     CLOUDINARY_CLOUD_NAME: trimmedOptionalString,
     CLOUDINARY_API_KEY: trimmedOptionalString,
     CLOUDINARY_API_SECRET: trimmedOptionalString,
