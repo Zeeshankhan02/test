@@ -40,13 +40,9 @@ const schema = z
       .max(7776000)
       .default(2592000),
     COOKIE_DOMAIN: optionalString,
-    SMTP_HOST: optionalString,
-    SMTP_PORT: z.preprocess(
-      (value) => (value === "" ? undefined : value),
-      z.coerce.number().int().min(1).max(65535).optional(),
-    ),
-    SMTP_USER: optionalString,
-    SMTP_PASSWORD: optionalString,
+    GOOGLE_CLIENT_ID: trimmedOptionalString,
+    GOOGLE_CLIENT_SECRET: trimmedOptionalString,
+    GOOGLE_REFRESH_TOKEN: trimmedOptionalString,
     EMAIL_FROM: z.preprocess(
       (value) => (value === "" ? undefined : value),
       z.email().optional(),
@@ -72,15 +68,14 @@ const schema = z
     "SameSite=None requires Secure cookies",
   )
   .refine((value) => {
-    const smtp = [
-      value.SMTP_HOST,
-      value.SMTP_PORT,
-      value.SMTP_USER,
-      value.SMTP_PASSWORD,
+    const gmail = [
+      value.GOOGLE_CLIENT_ID,
+      value.GOOGLE_CLIENT_SECRET,
+      value.GOOGLE_REFRESH_TOKEN,
       value.EMAIL_FROM,
     ];
-    return !smtp.some(Boolean) || smtp.every(Boolean);
-  }, "SMTP_HOST requires SMTP_PORT, SMTP_USER, SMTP_PASSWORD, and EMAIL_FROM")
+    return !gmail.some(Boolean) || gmail.every(Boolean);
+  }, "Gmail API email requires GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_REFRESH_TOKEN, and EMAIL_FROM")
   .refine((value) => {
     const cloudinary = [
       value.CLOUDINARY_CLOUD_NAME,

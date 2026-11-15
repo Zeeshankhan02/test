@@ -1,28 +1,83 @@
 import nodemailer from "nodemailer";
+import { Readable } from "node:stream";
 import { env } from "../../config/env.js";
 
-const transport =
-  env.SMTP_HOST && env.SMTP_PORT && env.SMTP_USER && env.SMTP_PASSWORD
-    ? nodemailer.createTransport({
-        host: env.SMTP_HOST,
-        port: env.SMTP_PORT,
-        secure: env.SMTP_PORT === 465,
-        auth: { user: env.SMTP_USER, pass: env.SMTP_PASSWORD },
-      })
-    : null;
+const mimeTransport = nodemailer.createTransport({ streamTransport: true, buffer: true });
 
-export const emailConfigured = Boolean(transport && env.EMAIL_FROM);
+export const emailConfigured = Boolean(
+  env.GOOGLE_CLIENT_ID &&
+    env.GOOGLE_CLIENT_SECRET &&
+    env.GOOGLE_REFRESH_TOKEN &&
+    env.EMAIL_FROM,
+);
+
+async function sendEmail(input: {
+  to?: string;
+  bcc?: string[];
+  subject: string;
+  text: string;
+  html: string;
+}) {
+  if (
+    !emailConfigured ||
+    !env.GOOGLE_CLIENT_ID ||
+    !env.GOOGLE_CLIENT_SECRET ||
+    !env.GOOGLE_REFRESH_TOKEN ||
+    !env.EMAIL_FROM
+  )
+    throw new Error("Gmail API email is not configured");
+
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.GOOGLE_CLIENT_ID,
+      client_secret: env.GOOGLE_CLIENT_SECRET,
+      refresh_token: env.GOOGLE_REFRESH_TOKEN,
+      grant_type: "refresh_token",
+    }),
+  });
+  const tokenResult = await tokenResponse.json() as { access_token?: string; error?: string };
+  if (!tokenResponse.ok || !tokenResult.access_token)
+    throw new Error(`Google OAuth token request failed (${tokenResponse.status}): ${tokenResult.error || "No access token returned"}`);
+
+  const { message } = await mimeTransport.sendMail({
+    from: env.EMAIL_FROM,
+    to: input.to,
+    bcc: input.bcc,
+    subject: input.subject,
+    text: input.text,
+    html: input.html,
+  });
+  const mime = Buffer.isBuffer(message)
+    ? message
+    : await new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        (message as Readable).on("data", (chunk: Buffer | string) => chunks.push(Buffer.from(chunk)));
+        (message as Readable).once("end", () => resolve(Buffer.concat(chunks)));
+        (message as Readable).once("error", reject);
+      });
+  const response = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${tokenResult.access_token}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({ raw: mime.toString("base64url") }),
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Gmail API send failed (${response.status}): ${detail.slice(0, 500)}`);
+  }
+}
 
 export async function sendPasswordReset(
   recipient: { name: string; email: string },
   token: string,
 ) {
-  if (!transport || !env.EMAIL_FROM)
-    throw new Error("Email provider is not configured");
   const resetUrl = new URL("/login", env.FRONTEND_URL);
   resetUrl.searchParams.set("reset", token);
-  await transport.sendMail({
-    from: env.EMAIL_FROM,
+  await sendEmail({
     to: recipient.email,
     subject: "Reset your FestiQO password",
     text: `Hello ${recipient.name}, reset your password using this one-time link: ${resetUrl.toString()}. It expires in 30 minutes.`,
@@ -35,12 +90,9 @@ export async function sendAuthOtp(
   code: string,
   purpose: "signup" | "password_reset",
 ) {
-  if (!transport || !env.EMAIL_FROM)
-    throw new Error("Email provider is not configured");
   const isSignup = purpose === "signup";
   const name = recipient.name.replace(/[&<>"']/g, "");
-  await transport.sendMail({
-    from: env.EMAIL_FROM,
+  await sendEmail({
     to: recipient.email,
     subject: isSignup ? "Verify your FestiQO email" : "Your FestiQO password reset code",
     text: `Hello ${recipient.name}, your ${isSignup ? "email verification" : "password reset"} code is ${code}. It expires in 10 minutes. If you did not request this code, ignore this email.`,
@@ -53,8 +105,6 @@ export async function sendAnnouncementEmails(
   title: string,
   message: string,
 ) {
-  if (!transport || !env.EMAIL_FROM)
-    throw new Error("Email provider is not configured");
   const escapeHtml = (value: string) =>
     value.replace(/[&<>"']/g, (character) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -69,16 +119,13 @@ export async function sendAnnouncementEmails(
     while (nextBatch < batches.length) {
       const batch = batches[nextBatch++]!;
       try {
-        const result = await transport.sendMail({
-          from: env.EMAIL_FROM,
-          to: env.EMAIL_FROM,
+        await sendEmail({
           bcc: batch.map(({ email }) => email),
           subject: title,
           text: `${title}\n\n${message}`,
           html: `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message).replace(/\r?\n/g, "<br>")}</p><p>FestiQO announcement</p>`,
         });
-        sent += result.accepted.length;
-        failed += result.rejected.length;
+        sent += batch.length;
       } catch {
         failed += batch.length;
       }

@@ -36,10 +36,6 @@ Object.assign(process.env, {
   CORS_ORIGINS: "",
   JWT_ACCESS_SECRET: "browser-test-access-secret-is-long-enough-123",
   JWT_REFRESH_SECRET: "browser-test-refresh-secret-is-long-enough-456",
-  SMTP_HOST: "",
-  SMTP_PORT: "",
-  SMTP_USER: "",
-  SMTP_PASSWORD: "",
   EMAIL_FROM: "",
 });
 
