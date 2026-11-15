@@ -3,6 +3,24 @@ import { Readable } from "node:stream";
 import { env } from "../../config/env.js";
 
 const mimeTransport = nodemailer.createTransport({ streamTransport: true, buffer: true });
+const escapeHtml = (value: string) =>
+  value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  })[character]!);
+
+function emailLayout(preheader: string, content: string) {
+  return `<!doctype html><html><body style="margin:0;padding:0;background:#f4f5f8;color:#252a35;font-family:Arial,Helvetica,sans-serif">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${escapeHtml(preheader)}</div>
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f5f8;padding:32px 12px"><tr><td align="center">
+      <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#fff;border:1px solid #e9e9ed;border-radius:12px;overflow:hidden">
+        <tr><td style="background:#7456ec;padding:22px 28px;color:#fff"><div style="font-size:22px;font-weight:700;letter-spacing:.2px">FestiQO</div><div style="margin-top:4px;font-size:12px;color:#eee9ff">College fest updates</div></td></tr>
+        <tr><td style="padding:30px 28px 24px">${content}</td></tr>
+        <tr><td style="border-top:1px solid #e9e9ed;padding:18px 28px;color:#777b87;font-size:12px;line-height:1.6">This message was sent by FestiQO. If you did not expect it, you can ignore this email.</td></tr>
+      </table>
+      <div style="padding:16px 8px;color:#8a909d;font-size:11px">FestiQO | College fest, all in one place</div>
+    </td></tr></table>
+  </body></html>`;
+}
 
 export const emailConfigured = Boolean(
   env.GOOGLE_CLIENT_ID &&
@@ -77,11 +95,12 @@ export async function sendPasswordReset(
 ) {
   const resetUrl = new URL("/login", env.FRONTEND_URL);
   resetUrl.searchParams.set("reset", token);
+  const safeUrl = escapeHtml(resetUrl.toString());
   await sendEmail({
     to: recipient.email,
     subject: "Reset your FestiQO password",
-    text: `Hello ${recipient.name}, reset your password using this one-time link: ${resetUrl.toString()}. It expires in 30 minutes.`,
-    html: `<p>Hello ${recipient.name.replace(/[&<>"']/g, "")},</p><p><a href="${resetUrl.toString()}">Reset your FestiQO password</a></p><p>This one-time link expires in 30 minutes.</p>`,
+    text: `Hello ${recipient.name},\n\nUse this link to choose a new FestiQO password:\n${resetUrl.toString()}\n\nThis link expires in 30 minutes. If you did not request a password reset, you can ignore this email.\n\nFestiQO`,
+    html: emailLayout("Reset your FestiQO password", `<h1 style="margin:0 0 14px;font-size:24px;line-height:1.3;color:#252a35">Reset your password</h1><p style="margin:0 0 16px;font-size:15px;line-height:1.7;color:#525866">Hello ${escapeHtml(recipient.name)},</p><p style="margin:0 0 24px;font-size:15px;line-height:1.7;color:#525866">Use the button below to choose a new password for your FestiQO account.</p><p style="margin:0 0 24px"><a href="${safeUrl}" style="display:inline-block;border-radius:7px;background:#7456ec;padding:13px 20px;color:#fff;font-size:14px;font-weight:700;text-decoration:none">Reset password</a></p><p style="margin:0 0 8px;font-size:13px;line-height:1.6;color:#6f7582">This link expires in 30 minutes. If the button does not work, copy this address into your browser:</p><p style="margin:0 0 16px;word-break:break-all;font-size:12px;line-height:1.6"><a href="${safeUrl}" style="color:#6749df">${safeUrl}</a></p><p style="margin:0;font-size:13px;line-height:1.6;color:#6f7582">If you did not request a password reset, you can ignore this email.</p>`),
   });
 }
 
@@ -91,12 +110,12 @@ export async function sendAuthOtp(
   purpose: "signup" | "password_reset",
 ) {
   const isSignup = purpose === "signup";
-  const name = recipient.name.replace(/[&<>"']/g, "");
+  const purposeLabel = isSignup ? "email verification" : "password reset";
   await sendEmail({
     to: recipient.email,
     subject: isSignup ? "Verify your FestiQO email" : "Your FestiQO password reset code",
-    text: `Hello ${recipient.name}, your ${isSignup ? "email verification" : "password reset"} code is ${code}. It expires in 10 minutes. If you did not request this code, ignore this email.`,
-    html: `<p>Hello ${name},</p><p>Your ${isSignup ? "email verification" : "password reset"} code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px">${code}</p><p>This code expires in 10 minutes. If you did not request it, ignore this email.</p>`,
+    text: `Hello ${recipient.name},\n\nYour FestiQO ${purposeLabel} code is:\n\n${code}\n\nThis code expires in 10 minutes. For your security, do not share it with anyone. If you did not request it, you can ignore this email.\n\nFestiQO`,
+    html: emailLayout(`Your ${purposeLabel} code is ${code}`, `<h1 style="margin:0 0 14px;font-size:24px;line-height:1.3;color:#252a35">${isSignup ? "Verify your email" : "Reset your password"}</h1><p style="margin:0 0 18px;font-size:15px;line-height:1.7;color:#525866">Hello ${escapeHtml(recipient.name)}, use this one-time code to continue:</p><div style="margin:0 0 20px;border:1px solid #e9e5ff;border-radius:9px;background:#f7f5ff;padding:18px;text-align:center;color:#38277e;font-size:32px;font-weight:700;letter-spacing:8px">${code}</div><p style="margin:0 0 10px;font-size:13px;line-height:1.6;color:#6f7582">This code expires in 10 minutes. For your security, never share it with anyone.</p><p style="margin:0;font-size:13px;line-height:1.6;color:#6f7582">If you did not request this code, you can ignore this email.</p>`),
   });
 }
 
@@ -105,10 +124,6 @@ export async function sendAnnouncementEmails(
   title: string,
   message: string,
 ) {
-  const escapeHtml = (value: string) =>
-    value.replace(/[&<>"']/g, (character) => ({
-      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-    })[character]!);
   let sent = 0;
   let failed = 0;
   let nextBatch = 0;
@@ -122,8 +137,8 @@ export async function sendAnnouncementEmails(
         await sendEmail({
           bcc: batch.map(({ email }) => email),
           subject: title,
-          text: `${title}\n\n${message}`,
-          html: `<h2>${escapeHtml(title)}</h2><p>${escapeHtml(message).replace(/\r?\n/g, "<br>")}</p><p>FestiQO announcement</p>`,
+          text: `${title}\n\n${message}\n\nYour FestiQO organizers`,
+          html: emailLayout("A new announcement from FestiQO", `<h1 style="margin:0 0 16px;font-size:24px;line-height:1.3;color:#252a35">${escapeHtml(title)}</h1><div style="font-size:15px;line-height:1.75;color:#525866">${escapeHtml(message).replace(/\r?\n/g, "<br>")}</div><p style="margin:24px 0 0;font-size:13px;color:#6f7582">Your FestiQO organizers</p>`),
         });
         sent += batch.length;
       } catch {
