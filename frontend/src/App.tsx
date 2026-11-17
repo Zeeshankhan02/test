@@ -37,7 +37,7 @@ import ThemeToggle from "./ThemeToggle";
 import { useAuth } from "./AuthContext";
 import { VolunteersPage } from "./features/admin/volunteers/VolunteersPage";
 import { CertificatesPage } from "./features/admin/certificates/CertificatesPage";
-import { ProfilePage } from "./shared/components/ui";
+import { Modal, ProfilePage } from "./shared/components/ui";
 import {
   StudentDashboard,
   EventsPage,
@@ -208,6 +208,7 @@ function Workspace({
   const navigate = useNavigate();
   const [searchOpen, setSearchOpen] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [confirmLogout, setConfirmLogout] = useState(false);
   const [studentQuizzes, setStudentQuizzes] = useState<ApiQuiz[]>([]);
   const [quizAccessLoading, setQuizAccessLoading] = useState(
     user.role === "student",
@@ -292,7 +293,7 @@ function Workspace({
                     : "Student account"}
               </small>
             </span>
-            <button aria-label="Sign out" onClick={onLogout}>
+            <button aria-label="Sign out" onClick={() => setConfirmLogout(true)}>
               <LogOut size={16} />
             </button>
           </div>
@@ -487,6 +488,19 @@ function Workspace({
         </div>
       </main>
       <MobileNav nav={nav} path={location.pathname} />
+      {confirmLogout && (
+        <Modal title="Log out?" close={() => setConfirmLogout(false)}>
+          <p>Are you sure you want to log out?</p>
+          <div className="modal-actions">
+            <button className="btn btn-outline" onClick={() => setConfirmLogout(false)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={onLogout}>
+              Log out
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

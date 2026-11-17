@@ -8,10 +8,12 @@ import type { Principal } from "../../middleware/authenticate.middleware.js";
 import { emailConfigured, sendAuthOtp } from "../../integrations/email/email.js";
 import { disconnectUserSockets } from "../../sockets/socket-server.js";
 
-const digest = (value: string) => createHmac("sha256", env.JWT_ACCESS_SECRET).update(value).digest("hex");
+const digest = (value: string) =>
+  createHmac("sha256", env.JWT_ACCESS_SECRET).update(value).digest("hex");
 const otpDigest = (email: string, purpose: string, code: string) =>
   digest(`${email}:${purpose}:${code}`);
-const otpChallengeId = (email: string, purpose: string) => digest(`challenge:${purpose}:${email}`);
+const otpChallengeId = (email: string, purpose: string) =>
+  digest(`challenge:${purpose}:${email}`);
 const OTP_TTL_MS = 10 * 60 * 1000;
 const OTP_RESEND_WAIT_MS = 60 * 1000;
 const OTP_MAX_ATTEMPTS = 5;
@@ -96,7 +98,11 @@ async function sendOtp(input: {
   }
 }
 
-async function consumeOtp(email: string, purpose: "signup" | "password_reset", code: string) {
+async function consumeOtp(
+  email: string,
+  purpose: "signup" | "password_reset",
+  code: string,
+) {
   const challenge = await AuthOtp.findOneAndDelete({
     _id: otpChallengeId(email, purpose),
     codeHash: otpDigest(email, purpose, code),
@@ -105,7 +111,12 @@ async function consumeOtp(email: string, purpose: "signup" | "password_reset", c
   }).select("+passwordHash");
   if (challenge) return challenge;
   await AuthOtp.updateOne(
-    { email, purpose, expiresAt: { $gt: new Date() }, attempts: { $lt: OTP_MAX_ATTEMPTS } },
+    {
+      email,
+      purpose,
+      expiresAt: { $gt: new Date() },
+      attempts: { $lt: OTP_MAX_ATTEMPTS },
+    },
     { $inc: { attempts: 1 } },
   );
   return fail(400, "INVALID_OTP", "The code is invalid or expired");
@@ -237,7 +248,11 @@ export async function requestPasswordReset(email: string) {
   });
 }
 
-export async function completePasswordReset(emailInput: string, code: string, password: string) {
+export async function completePasswordReset(
+  emailInput: string,
+  code: string,
+  password: string,
+) {
   const email = emailInput.toLowerCase();
   const challenge = await consumeOtp(email, "password_reset", code);
   const user = await User.findOneAndUpdate(
